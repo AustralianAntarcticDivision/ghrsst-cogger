@@ -21,6 +21,18 @@ Care has been taken to not change the source data, but just to repackage it into
 STAC metadata. Each daily dataset is accessible in a `<year>/<month>/<day>` path, and file names are consistent with the
 source data, e.g., `"{$Y%m%d}090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.stac-item.json`.
 
+### Data Variables
+
+| Name | Long Name | Unit |
+|------|-----------|------|
+| analysed_sst | analysed sea surface temperature | kelvin |
+| analysis_error | estimated error standard deviation of analysed_sst | kelvin |
+| lat | latitude | degrees_north |
+| lon | longitude | degrees_east |
+| mask | sea/land field composite mask | - |
+| sea_ice_fraction | sea ice area fraction | fraction (between 0 and 1) |
+| time | reference time of sst field | seconds since 1981-01-01 00:00:00 UTC |
+
 ## Accessing data
 
 ### Using Python
