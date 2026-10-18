@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from datetime import datetime
 from logging import Logger
 from pathlib import Path
-from typing import Tuple, Union
 
 import boto3
 import click
@@ -19,7 +18,7 @@ from botocore.exceptions import ClientError
 from earthaccess import get_edl_token, login
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import assign_crs, xr_coords
-from pystac import Asset, Item, MediaType, Link, RelType
+from pystac import Asset, Item, Link, MediaType, RelType
 from rio_stac import create_stac_item
 from s3path import S3Path
 from xarray import Dataset
@@ -63,11 +62,11 @@ def environ(env):
                 os.environ[key] = value
 
 
-def _is_s3_path(path: Union[Path, S3Path]) -> bool:
+def _is_s3_path(path: Path | S3Path) -> bool:
     return isinstance(path, S3Path)
 
 
-def _exists(path: Union[Path, S3Path]) -> bool:
+def _exists(path: Path | S3Path) -> bool:
     if _is_s3_path(path):
         try:
             s3 = boto3.client("s3")
@@ -79,7 +78,7 @@ def _exists(path: Union[Path, S3Path]) -> bool:
         return path.exists()
 
 
-def _get_href(path: Union[Path, S3Path]) -> str:
+def _get_href(path: Path | S3Path) -> str:
     href = str(path)
     if _is_s3_path(path):
         # Assume we're writing to source.coop
@@ -89,6 +88,7 @@ def _get_href(path: Union[Path, S3Path]) -> str:
             href = f"s3:/{path}"
 
     return href
+
 
 def get_logger():
     logger = logging.getLogger(__name__)
@@ -110,9 +110,7 @@ if os.environ.get("AWS_EXECUTION_ENV") is not None:
     LOGGER = get_logger()
 
 
-def get_output_path(
-    output_location: Union[Path, S3Path], date: datetime, extension: str
-):
+def get_output_path(output_location: Path | S3Path, date: datetime, extension: str):
     return (
         output_location
         / FOLDER_PATH.format(date=date)
@@ -202,7 +200,7 @@ def load_data(
         except ClientResponseError as e:
             raise GHRSSTException(
                 f"Failed to open {input_path} with error {e}. Please check your EARTHDATA_TOKEN."
-            )
+            ) from e
         # Don't catch this here. Catch it elsewhere and handle differently.
         # except FileNotFoundError as e:
         #     raise GHRSSTException(f"File not found for {input_path} with error {e}")
@@ -247,7 +245,7 @@ def process_data(data: Dataset) -> Dataset:
 def write_data(
     data: Dataset,
     date: datetime,
-    output_location: Union[Path, S3Path],
+    output_location: Path | S3Path,
     overwrite: bool = False,
     log: Logger | None = None,
 ):
@@ -292,6 +290,7 @@ def write_data(
 
         # Use the private method, forcing the geobox
         from odc.geo.cog._rio import _get_gdal_metadata, _write_cog
+
         cog_file.write_bytes(
             _write_cog(
                 data_var,
@@ -313,10 +312,10 @@ def write_data(
 
 def write_stac(
     data: Dataset,
-    written_files: Tuple[Tuple[str, Path]],
+    written_files: tuple[tuple[str, Path]],
     date: datetime,
-    output_location: Union[Path, S3Path],
-    log: Logger | None = None
+    output_location: Path | S3Path,
+    log: Logger | None = None,
 ) -> Item:
     stac_file = get_output_path(output_location, date, ".stac-item.json")
 
@@ -399,7 +398,7 @@ def get_context() -> dict[str, str]:
 def process_date(
     date: datetime,
     input_location: str,
-    output_location: Union[Path, S3Path],
+    output_location: Path | S3Path,
     overwrite: bool = False,
     cache_local: bool = False,
     log: logging.Logger = None,

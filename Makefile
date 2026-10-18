@@ -45,6 +45,14 @@ test-docker:
 test:
 	pytest tests/
 
+lint:
+	ruff check .
+	ruff format --check .
+
+format:
+	ruff check --fix .
+	ruff format .
+
 data/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc:
 	echo "Go get the file!"
 

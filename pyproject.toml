@@ -41,3 +41,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ghrsst"]
+
+[tool.ruff]
+extend-exclude = ["*.ipynb"]
+
+[tool.ruff.lint]
+# Pyflakes, pycodestyle errors, import sorting, pyupgrade, bugbear
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
