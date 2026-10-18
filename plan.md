@@ -25,7 +25,7 @@ Sampling COG `Last-Modified` dates on source.coop shows:
   about **2025-02-01** well after day 9, so those dates are **final**.
 - From about **2025-02-02** onwards, the daily job wrote each date 1–2 days after it (e.g.
   2026-08-01 written 3 Aug 2026), so those dates are **preliminary**.
-- **Estimate: about 625 dates need reprocessing** (2025-02-02 to today). PR 3 produces the
+- **Estimate: about 625 dates need reprocessing** (2025-02-02 to today). PR 5 produces the
   exact count.
 
 Agreed with Mike: ingest the preliminary file as now, re-convert once the final file has
@@ -160,7 +160,36 @@ GitHub Actions, two workflows.
 - Push a test tag (for example `v0.13.0-rc1`) and confirm the image appears in ECR.
 - Point `test.tfvars` at that tag and apply to the test stack.
 
-## PR 4: Count preliminary vs final (read-only)
+## PR 4: Upgrade dependencies
+
+PR 1 kept the exact versions from `requirements.txt`, so packaging and upgrades stay
+separate. All 18 direct dependencies are now behind. The `>=` bounds in `pyproject.toml`
+can stay as they are, because `uv.lock` pins the exact versions.
+
+- Run `uv lock --upgrade` and review the diff in `uv.lock`.
+- Remove `odc-cloud`, which nothing imports.
+  - Keep dask, h5netcdf, netcdf4, rasterio and shapely. They aren't imported directly but
+    are needed at runtime: as xarray backends, for chunking, or for odc-geo's COG writing.
+- Upgrades most likely to break something:
+
+  | Package | From → to | Risk |
+  |---|---|---|
+  | odc-geo | 0.4.9 → 0.5.x | `cogger.py` calls the private functions `odc.geo.cog._rio._write_cog` and `_get_gdal_metadata`, where the geotransform fix lives |
+  | earthaccess | 0.13 → 0.19 | `login(strategy="environment")` and `get_edl_token()` for the Earthdata login |
+  | awslambdaric | 3.0 → 4.x | Major version; it's the Lambda entrypoint |
+  | stacrs | 0.5.3 → 0.5.9 | Stay within 0.5. The package has been renamed `rustac`; switching is a later job |
+  | xarray, dask, fsspec | about 20 months behind | Loading, chunking and HTTP reads of the NetCDF |
+
+- If something breaks, cap that package (e.g. `odc-geo<0.5`) and note why in
+  `pyproject.toml`, rather than holding everything back.
+- **Check:** the unit tests skip without data, so run a real conversion:
+  - Convert the same date with the old (`0.13.0`) and new images.
+  - The COGs should be pixel-identical.
+  - The geotransform should be unchanged (`-179.995, 0.01`), and the STAC items equivalent.
+  - Deploy to the test stack and run one queued date. This checks awslambdaric and the
+    Earthdata login.
+
+## PR 5: Count preliminary vs final (read-only)
 
 Add `ghrsst/audit.py` with a click CLI. It changes nothing; it only reports.
 
@@ -180,13 +209,13 @@ Add `ghrsst/audit.py` with a click CLI. It changes nothing; it only reports.
    - `missing`: there's a NetCDF in CMR but no COG.
 4. Write a CSV (`date, cog_mtime, production, lag_days, status`) and print the counts. Also
    flag any production lag other than 9 days.
-- `cmr_production_times` and `get_status` live here and are reused by PR 4.
-- **Run it and post the counts on #5** before PR 4. This answers "how many need
+- `cmr_production_times` and `get_status` live here and are reused by PR 6.
+- **Run it and post the counts on #5** before PR 6. This answers "how many need
   reprocessing" exactly.
 - **Test:** `tests/test_audit.py` checks that `get_status` returns `preliminary` for a
   1-day lag and `final` for a 9-day lag, and that a saved CMR JSON response parses.
 
-## PR 5: Cogger confirms preliminary → final
+## PR 6: Cogger confirms preliminary → final
 
 ### `ghrsst/cogger.py`
 - `write_stac`: add `ghrsst:status` and `ghrsst:source_production_datetime`.
@@ -222,7 +251,7 @@ Add `ghrsst/audit.py` with a click CLI. It changes nothing; it only reports.
   then patches already-final items and re-converts the ~625 preliminary ones.
 - SQS keeps messages for 1 day; ~8,500 messages finish well within that. Afterwards, check
   the dead-letter queue and re-queue any failures.
-- Re-run the PR 3 audit: it should show 0 `preliminary` items older than 10 days.
+- Re-run the PR 5 audit: it should show 0 `preliminary` items older than 10 days.
 
 ### Docs
 - `readme_for_source_coop.md`: describe the two properties and the ~10-day preliminary
