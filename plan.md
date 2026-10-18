@@ -253,6 +253,8 @@ Add `ghrsst/audit.py` with a click CLI. It changes nothing; it only reports.
   the dead-letter queue and re-queue any failures.
 - Re-run the PR 5 audit: it should show 0 `preliminary` items older than 10 days.
 
+# TODO: Do we need to rewrite all STAC items with a status of final/preliminary? Do the already processed items have a status or just. a date? Could be good to add custom STAC properties of `date_created_preliminary`, `date_finalised`, and `status` or similar.
+
 ### Docs
 - `readme_for_source_coop.md`: describe the two properties and the ~10-day preliminary
   window, then publish with `make update-readme`.
