@@ -128,7 +128,39 @@ of 4).
 - Add `make lint` / `make format` targets.
 - **Check:** `ruff check` is clean and `uv run pytest` passes.
 
-## PR 3: Count preliminary vs final (read-only)
+## PR 3: CI — build, test and push the image
+
+GitHub Actions, two workflows.
+
+**On every PR and push to `main`** (`.github/workflows/ci.yml`):
+
+- `uv sync --frozen`, then `ruff check` and `ruff format --check`.
+- Build the `test` Docker stage and run it (`make test-docker`). Tests that need the sample
+  NetCDF skip, because downloading it needs Earthdata credentials.
+- Build the `final` stage. Its build step imports all three Lambda handlers, which catches
+  a broken image before it reaches ECR. Nothing is pushed.
+- Cache Docker layers with `cache-from/cache-to: type=gha`. The dependency layer (rasterio
+  from source) is the slow part and only changes when `uv.lock` does.
+
+**On a version tag `v*`** (`.github/workflows/release.yml`):
+
+- Build `final` for `linux/amd64` and push to ECR as `<version>` and `latest`.
+- Authenticate with GitHub OIDC instead of long-lived AWS keys. Add to `terraform/main.tf`:
+  - an `aws_iam_openid_connect_provider` for `token.actions.githubusercontent.com`
+  - a role that only this repo can assume, with ECR push permissions on the
+    `ghrsst-cogger` repository
+- Check that the tag matches `version` in `pyproject.toml`, and fail otherwise.
+
+**Deploys stay manual:** bump the image tag in `terraform/prod.tfvars`, then run `make apply`.
+`apply` changes production, so it stays a deliberate step.
+
+**Check:**
+
+- Open a PR and confirm the CI workflow runs and passes.
+- Push a test tag (for example `v0.13.0-rc1`) and confirm the image appears in ECR.
+- Point `test.tfvars` at that tag and apply to the test stack.
+
+## PR 4: Count preliminary vs final (read-only)
 
 Add `ghrsst/audit.py` with a click CLI. It changes nothing; it only reports.
 
@@ -154,7 +186,7 @@ Add `ghrsst/audit.py` with a click CLI. It changes nothing; it only reports.
 - **Test:** `tests/test_audit.py` checks that `get_status` returns `preliminary` for a
   1-day lag and `final` for a 9-day lag, and that a saved CMR JSON response parses.
 
-## PR 4: Cogger confirms preliminary → final
+## PR 5: Cogger confirms preliminary → final
 
 ### `ghrsst/cogger.py`
 - `write_stac`: add `ghrsst:status` and `ghrsst:source_production_datetime`.
