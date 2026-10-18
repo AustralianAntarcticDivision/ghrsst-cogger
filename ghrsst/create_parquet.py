@@ -65,12 +65,12 @@ async def get_items(dates, input_location):
 
 
 async def create_parquet(
-    start_date: str,
-    end_date: str,
+    start_date: datetime,
+    end_date: datetime,
     input_location: str,
     output_location: str,
     write_tempfile: bool = False,
-    log: Logger = None,
+    log: Logger | None = None,
 ) -> int:
     dates = [
         start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)
@@ -84,7 +84,8 @@ async def create_parquet(
 
     items = await fetch_all_items(dates, input_location)
 
-    log.info(f"Found {len(items)} STAC items")
+    if log is not None:
+        log.info(f"Found {len(items)} STAC items")
 
     # Write items to parquet
     output_location = output_location.replace("s3:/", "s3://")
@@ -115,7 +116,8 @@ async def create_parquet(
                 out.write_bytes(f.read())
         else:
             # Write direct to S3
-            log.info(f"Writing {len(items)} items to S3 at: {out}")
+            if log is not None:
+                log.info(f"Writing {len(items)} items to S3 at: {out}")
             await stacrs.write(out, items)
     else:
         await stacrs.write(out, items)

@@ -30,8 +30,10 @@ same GDAL as the Docker image. This means `uv sync` needs GDAL installed locally
 ```bash
 uv sync
 source .venv/bin/activate
+prek install  # run ruff, ty and file checks on each commit
 
 make test       # tests that need the sample NetCDF in data/ are skipped without it
+make lint       # all prek hooks on all files: ruff, ty, uv lock --check
 make run-local  # convert one date from data/ to data/output
 ```
 

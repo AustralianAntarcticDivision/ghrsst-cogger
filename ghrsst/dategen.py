@@ -8,7 +8,7 @@ import boto3
 
 from ghrsst.cogger import get_logger
 
-N_PREVIOUS_DAYS = os.environ.get("N_PREVIOUS_DAYS", 7)
+N_PREVIOUS_DAYS = int(os.environ.get("N_PREVIOUS_DAYS", "7"))
 QUEUE_NAME = os.environ.get("QUEUE_NAME", "ghrsst-queue")
 
 

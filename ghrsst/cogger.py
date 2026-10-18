@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from logging import Logger
 from pathlib import Path
+from typing import Any
 
 import boto3
 import click
@@ -38,7 +39,7 @@ VARIABLES = [
 # Not loading or writing the datetime data
 DROP_VARIABLES = ["dt_1km_data"]
 VARIABLES = [var for var in VARIABLES if var not in DROP_VARIABLES]
-COG_OPTS = dict(compress="zstd")
+COG_OPTS: dict[str, Any] = dict(compress="zstd")
 
 
 class GHRSSTException(Exception):
@@ -67,7 +68,7 @@ def _is_s3_path(path: Path | S3Path) -> bool:
 
 
 def _exists(path: Path | S3Path) -> bool:
-    if _is_s3_path(path):
+    if isinstance(path, S3Path):
         try:
             s3 = boto3.client("s3")
             s3.head_object(Bucket=path.bucket, Key=path.key)
@@ -105,7 +106,7 @@ def get_logger():
 
 
 # If we're in Lambda, create a logger
-LOGGER = None
+LOGGER = logging.getLogger(__name__)
 if os.environ.get("AWS_EXECUTION_ENV") is not None:
     LOGGER = get_logger()
 
@@ -143,7 +144,7 @@ def get_headers() -> dict[str, str]:
     if earthdata_token is None:
         auth = login(strategy="environment")
         if auth.authenticated:
-            earthdata_token = get_edl_token()["access_token"]
+            earthdata_token = get_edl_token()["access_token"]  # ty: ignore[invalid-argument-type]  # earthaccess annotates str, returns dict
         else:
             raise GHRSSTException("Failed to authenticate with Earthdata")
 
@@ -174,7 +175,7 @@ def get_simple_raster_info(data: Dataset, var: str):
 
 
 def load_data(
-    date: datetime, input_location: Path, cache_local: bool = False, log: Logger = None
+    date: datetime, input_location: str, cache_local: bool = False, log: Logger = LOGGER
 ) -> Dataset:
     input_path = get_input_path(input_location, date)
 
@@ -247,7 +248,7 @@ def write_data(
     date: datetime,
     output_location: Path | S3Path,
     overwrite: bool = False,
-    log: Logger | None = None,
+    log: Logger = LOGGER,
 ):
     if not _is_s3_path(output_location):
         if not output_location.exists():
@@ -293,7 +294,7 @@ def write_data(
 
         cog_file.write_bytes(
             _write_cog(
-                data_var,
+                data_var,  # ty: ignore[invalid-argument-type]  # private API, accepts DataArray
                 data.odc.geobox,
                 ":mem:",
                 nodata=data_var.attrs.get("nodata"),
@@ -315,7 +316,7 @@ def write_stac(
     written_files: tuple[tuple[str, Path]],
     date: datetime,
     output_location: Path | S3Path,
-    log: Logger | None = None,
+    log: Logger = LOGGER,
 ) -> Item:
     stac_file = get_output_path(output_location, date, ".stac-item.json")
 
@@ -401,7 +402,7 @@ def process_date(
     output_location: Path | S3Path,
     overwrite: bool = False,
     cache_local: bool = False,
-    log: logging.Logger = None,
+    log: Logger | None = None,
 ):
     """Process a date from a data source and output to a location
 
