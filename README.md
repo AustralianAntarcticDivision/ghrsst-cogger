@@ -17,6 +17,25 @@ The architecture for this process has the following components:
 
 ![Architecture](architecture.png).
 
+## Quickstart
+
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). Python 3.12 is pinned in
+`.python-version` and uv will download it if needed.
+
+```bash
+uv sync
+source .venv/bin/activate
+
+make test       # tests that need the sample NetCDF in data/ are skipped without it
+make run-local  # convert one date from data/ to data/output
+```
+
+Add a dependency with `uv add <package>` (or `uv add --dev <package>`), which updates
+`pyproject.toml` and `uv.lock`. Commit both.
+
+Build the Lambda image with `make build VERSION=x.y.z` and run the tests inside the image
+with `make test-docker`.
+
 ## Cost calculation
 
 Lambda costs `0.0000133334` per GB second. We're running with `10 GB` of memory. Each
