@@ -22,12 +22,6 @@ The architecture for this process has the following components:
 Dependencies are managed with [uv](https://docs.astral.sh/uv/). Python 3.12 is pinned in
 `.python-version` and uv will download it if needed.
 
-rasterio is built from source against the system GDAL (`no-binary-package` in
-`pyproject.toml`) rather than using the wheel's bundled GDAL, so the COG writing uses the
-same GDAL as the Docker image. This means `uv sync` needs GDAL installed locally
-(e.g. `brew install gdal`, so that `gdal-config` is on the `PATH`). rasterio links to that
-GDAL, so after upgrading GDAL, rebuild it with `uv sync --reinstall-package rasterio`.
-
 ```bash
 uv sync
 source .venv/bin/activate
@@ -54,6 +48,30 @@ Lambda costs `0.0000133334` per GB second. We're running with `10 GB` of memory.
 job takes around 5 minutes, and there's around 10,000 jobs. So we have a total cost
 of `10000 * 0.0000133334 * 10 * 5 * 60` which is `$400` USD. Running each day to convert
 the latest data costs almost nothing.
+
+## AWS access
+
+The infrastructure is in the `IDEA_AAD` account (`381491825451`), region `us-west-2`.
+Sign in as your IAM user with [`aws login`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html),
+which reuses your console sign-in so there are no access keys to store. It needs AWS
+CLI 2.32 or later.
+
+```bash
+aws login --profile aad    # opens the browser; choose us-west-2 the first time
+aws sts get-caller-identity --profile aad    # arn:aws:iam::381491825451:user/<you>
+```
+
+Terraform can't read `aws login` credentials yet, so export temporary keys into the
+shell before running `terraform` or `make plan`/`make apply`:
+
+```bash
+eval "$(aws configure export-credentials --profile aad --format env)"
+export AWS_REGION=us-west-2
+make init plan
+```
+
+The exported keys expire with the session, so re-run the `eval` line after logging in again.
+The AWS CLI and `make get-ecr-login` can use the profile directly (`export AWS_PROFILE=aad`).
 
 ## Infra deployment v2
 
@@ -107,10 +125,7 @@ This will likely fail on the Lambda step, so
 [push the Docker image](https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-push-ecr-image.html).
 
 ```bash
-# Authenticate with ECR
-
-# Push the image
-
+make get-ecr-login build push VERSION=x.y.z
 ```
 
 Now apply again: `terraform apply`.
@@ -134,7 +149,15 @@ Note that the first deploy will fail on the Lambda step, but will
 have created the ECR repository, so push an image, then re-apply, and
 it should work.
 
-## Notes on GitHub Actions
+## Releasing
 
-This should have a Terraform process to create the ECR and use OIDC for auth
-for pushing the image from Actions to AWS. (Or the equivalent in Bitbucket.)
+GitHub Actions runs `lint-build-test` on every PR and push to `main`. Pushing a version
+tag runs `release-push-image`, which builds the Lambda image and pushes it to ECR,
+authenticating with GitHub OIDC (the `ghrsst-github-actions` role in Terraform).
+
+1. Set `version` in `pyproject.toml` (e.g. `0.13.0`) and merge to `main`.
+2. Tag and push: `git tag v0.13.0 && git push upstream v0.13.0`. A pre-release tag such as
+   `v0.13.0-rc1` pushes `:0.13.0-rc1` without moving `:latest`. The tag must match the
+   `pyproject.toml` version.
+3. When the workflow has finished, set `image_tag` in `terraform/prod.tfvars` and run
+   `make plan`, then `make apply` (see [AWS access](#aws-access)). Deploys are manual.
