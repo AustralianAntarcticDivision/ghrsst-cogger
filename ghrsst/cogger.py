@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, date, datetime
 from logging import Logger
 from pathlib import Path
 from typing import Any, TypeGuard
@@ -12,9 +12,12 @@ from typing import Any, TypeGuard
 import boto3
 import click
 import fsspec
+import requests
 import xarray as xr
 from affine import Affine
 from aiohttp.client_exceptions import ClientResponseError
+from botocore import UNSIGNED
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from earthaccess import get_edl_token, login
 from odc.geo.geobox import GeoBox
@@ -28,6 +31,10 @@ COLLECTION = "ghrsst-mur-v2"
 FILE_STRING = "{date:%Y%m%d}090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc"
 FOLDER_PATH = "{date:%Y}/{date:%m}/{date:%d}"
 JPL_BASE = "https://archive.podaac.earthdata.nasa.gov/podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/"
+CMR_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
+CMR_SHORT_NAME = "MUR-JPL-L4-GLOB-v4.1"
+# MUR's final NetCDF is produced 9 days after the granule date; the NRT one after ~1 day
+FINAL_SOURCE_LAG_DAYS = 9
 VARIABLES = [
     "analysed_sst",
     "analysis_error",
@@ -77,6 +84,14 @@ def _exists(path: Path | S3Path) -> bool:
             return False
     else:
         return path.exists()
+
+
+def _public_s3():
+    # ponytail: unsigned and us-west-2 only, fine for the public source.coop bucket.
+    # Pass a signed client in if a private bucket ever needs auditing.
+    return boto3.client(
+        "s3", region_name="us-west-2", config=Config(signature_version=UNSIGNED)
+    )
 
 
 def _get_href(path: Path | S3Path) -> str:
@@ -415,6 +430,94 @@ def get_context() -> dict[str, str]:
     return context
 
 
+def parse_production_times(umm_json: dict) -> dict[date, datetime]:
+    """Latest NetCDF ProductionDateTime per granule date from a CMR umm_json response.
+
+    Keyed by the date in GranuleUR, not the temporal extent: MUR's window for day D
+    starts at 21:00 on D-1, so a one-day query also returns the next day's granule.
+    """
+    times: dict[date, datetime] = {}
+    for item in umm_json["items"]:
+        umm = item["umm"]
+        day = datetime.strptime(umm["GranuleUR"][:8], "%Y%m%d").date()
+        produced = datetime.fromisoformat(umm["DataGranule"]["ProductionDateTime"])
+        # Keep the latest if CMR has more than one record for a granule
+        times[day] = max(produced, times.get(day, produced))
+    return times
+
+
+def get_production_times(start: date, end: date) -> dict[date, datetime]:
+    """When each MUR NetCDF from start to end (inclusive) was last produced, from CMR."""
+    try:
+        response = requests.get(
+            CMR_URL,
+            params={
+                "short_name": CMR_SHORT_NAME,
+                "temporal": f"{start:%Y-%m-%d}T00:00:00Z,{end:%Y-%m-%d}T23:59:59Z",
+                "page_size": 2000,
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+    except (requests.Timeout, requests.ConnectionError) as e:
+        raise GHRSSTException(
+            f"NASA CMR didn't respond ({type(e).__name__}). It's probably temporarily "
+            "down or overloaded, so try again later."
+        ) from e
+    except requests.HTTPError as e:
+        if response.status_code >= 500:
+            raise GHRSSTException(
+                f"NASA CMR returned HTTP {response.status_code}, a problem on its side. "
+                "Try again later."
+            ) from e
+        raise
+    umm_json = response.json()
+    # CMR caps a page at 2000 granules and truncates silently, so check
+    if umm_json["hits"] > len(umm_json["items"]):
+        raise GHRSSTException(
+            f"CMR returned {len(umm_json['items'])} of {umm_json['hits']} granules "
+            f"for {start} to {end}; query a shorter range"
+        )
+    return parse_production_times(umm_json)
+
+
+def get_cog_mtime(output_location: Path | S3Path, date: datetime) -> datetime | None:
+    """When the date's analysed_sst COG was written (all its COGs are written together)."""
+    cog = get_output_path(output_location, date, "_analysed_sst.tif")
+    if _is_s3_path(cog):
+        try:
+            return _public_s3().head_object(Bucket=cog.bucket, Key=cog.key)[
+                "LastModified"
+            ]
+        except ClientError:
+            return None
+    if not cog.exists():
+        return None
+    return datetime.fromtimestamp(cog.stat().st_mtime, tz=UTC)
+
+
+def classify(
+    day: date, cog_written: datetime | None, source_produced: datetime | None
+) -> tuple[str, str]:
+    """Whether a date's COG was made from the preliminary (NRT) or final NetCDF.
+
+    Returns (status, reason), where status is preliminary, final, unsure, missing
+    or no_data.
+    """
+    if cog_written is None:
+        if source_produced is None:
+            return "no_data", "no COG or CMR record"
+        return "missing", "no COG"
+    if source_produced is None:
+        return "unsure", "no CMR record to compare with"
+    if source_produced > cog_written:
+        return "preliminary", "NetCDF regenerated after the COG was written"
+    source_lag = (source_produced.date() - day).days
+    if source_lag >= FINAL_SOURCE_LAG_DAYS:
+        return "final", f"COG written from the final NetCDF (produced +{source_lag}d)"
+    return "preliminary", f"COG written from the NRT NetCDF (produced +{source_lag}d)"
+
+
 def process_date(
     date: datetime,
     input_location: str,
@@ -422,14 +525,25 @@ def process_date(
     overwrite: bool = False,
     cache_local: bool = False,
     log: Logger = LOGGER,
-):
+    audit: bool = False,
+) -> tuple[str, str] | None:
     """Process a date from a data source and output to a location
 
     Args:
         date (datetime): Date to process
         input_location (str): Either 'jpl' to grab data from JPL, or a local folder to find the data in
         output_location (str): Location to output results to
+        audit (bool): Only classify the existing COG as preliminary or final and return
+            (status, reason). Never downloads or writes anything.
     """
+    if audit:
+        produced = get_production_times(date.date(), date.date()).get(date.date())
+        status, reason = classify(
+            date.date(), get_cog_mtime(output_location, date), produced
+        )
+        log.info(f"Audit {date:%Y-%m-%d}: {status} ({reason})")
+        return status, reason
+
     log.info(
         f"Processing date {date:%Y-%m-%d} from {input_location} to {output_location}"
     )
@@ -518,8 +632,14 @@ def lambda_handler(event, _):
 @click.option("--input-location", type=str, default="JPL")
 @click.option("--overwrite/--no-overwrite", is_flag=True, default=False)
 @click.option("--cache-local/--no-cache-local", is_flag=True, default=False)
+@click.option(
+    "--audit/--no-audit",
+    is_flag=True,
+    default=False,
+    help="Only report whether the existing COG is preliminary or final",
+)
 @click.command("ghrsst-cogger")
-def main(date, output_location, input_location, overwrite, cache_local):
+def main(date, output_location, input_location, overwrite, cache_local, audit):
     date = datetime.strptime(date, "%Y-%m-%d")
 
     if output_location.startswith("s3://"):
@@ -530,7 +650,12 @@ def main(date, output_location, input_location, overwrite, cache_local):
     # Only catch known exceptions, and otherwise let the program crash
     try:
         process_date(
-            date, input_location, output_location, overwrite, cache_local=cache_local
+            date,
+            input_location,
+            output_location,
+            overwrite,
+            cache_local=cache_local,
+            audit=audit,
         )
     except GHRSSTException as e:
         print(f"Failed to process date {date:%Y-%m-%d} with error {e}")

@@ -9,6 +9,7 @@ requires-python = "==3.12.*"
 dependencies = [
     "aiohttp>=3.14.5,<4",
     "awslambdaric>=4.2.2,<5",
+    "boto3>=1.43.106,<2",
     "click>=8.5.0,<9",
     "dask>=2026.8.0",
     "earthaccess>=0.19.0,<0.20",
@@ -18,6 +19,7 @@ dependencies = [
     "odc-geo[tiff]>=0.5.3,<0.6",
     "pystac>=1.15.2,<2",
     "rasterio>=1.5.2,<2",
+    "requests>=2.34.2,<3",
     "rio-stac>=0.12.0,<0.13",
     "rustac>=0.9.17,<0.10",
     "s3path>=0.6.5,<0.7",

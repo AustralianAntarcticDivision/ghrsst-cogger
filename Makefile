@@ -48,6 +48,10 @@ download-test-data: data/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04
 test:
 	uv run pytest tests/
 
+# Count preliminary vs final COGs on source.coop. Read-only, writes data/audit.csv
+audit:
+	uv run python -m ghrsst.audit
+
 lint:
 	uv run prek run --all-files
 
