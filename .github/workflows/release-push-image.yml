@@ -3,10 +3,6 @@ name: Release - push image to ECR
 on:
   push:
     tags: ["v*"]
-  # TEMPORARY: also push on PRs to main to test the release. On a PR the image tag is
-  # the pyproject.toml version and :latest is never moved. Remove once a tag release works.
-  pull_request:
-    branches: [main]
 
 env:
   IMAGE: 381491825451.dkr.ecr.us-west-2.amazonaws.com/ghrsst-cogger
@@ -24,10 +20,6 @@ jobs:
       - name: Check tag matches pyproject version
         run: |
           version=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            echo "IMAGE_TAG=$version" >> "$GITHUB_ENV"
-            exit 0
-          fi
           tag="${GITHUB_REF_NAME#v}"
           if [ "$tag" != "$version" ] && [ "${tag%%-*}" != "$version" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match pyproject.toml version $version"
@@ -54,5 +46,5 @@ jobs:
           provenance: false
           tags: |
             ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
-            ${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') && format('{0}:latest', env.IMAGE) || '' }}
+            ${{ !contains(github.ref_name, '-') && format('{0}:latest', env.IMAGE) || '' }}
           cache-from: type=gha
