@@ -337,9 +337,8 @@ resource "aws_lambda_function" "parquet" {
 
   environment {
     variables = {
-      # TODO: "2000-01-01" is the applied value. Which is correct?
-      # Applying 2003-05-30 would remove about a year of data from the GeoParquet.
-      START_DATE      = "2003-05-30",
+      # First MUR date, and the first COG on source.coop
+      START_DATE      = "2002-06-01",
       OUTPUT_LOCATION = "s3://${var.destination_bucket_path}",
     }
   }
