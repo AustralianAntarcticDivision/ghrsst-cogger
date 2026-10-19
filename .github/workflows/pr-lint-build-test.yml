@@ -1,0 +1,47 @@
+name: PR - Lint, build and test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - run: uv sync --frozen
+      # ruff, ty, uv lock --check and file checks, as configured in .pre-commit-config.yaml
+      - run: uv run --frozen prek run --all-files --show-diff-on-failure
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Test. Skips NetCDF-dependent test in CI
+      - name: Build test image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: test
+          load: true
+          tags: ghrsst-cogger:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker run --rm ghrsst-cogger:test
+
+      # The final stage imports all three Lambda handlers, so a broken image fails here
+      - name: Build Lambda image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: final
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha

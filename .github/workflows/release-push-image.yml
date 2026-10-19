@@ -1,0 +1,58 @@
+name: Release - push image to ECR
+
+on:
+  push:
+    tags: ["v*"]
+  # TEMPORARY: also push on PRs to main to test the release. On a PR the image tag is
+  # the pyproject.toml version and :latest is never moved. Remove once a tag release works.
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE: 381491825451.dkr.ecr.us-west-2.amazonaws.com/ghrsst-cogger
+
+jobs:
+  push-image:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # GitHub OIDC token for AWS
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Tag v0.13.0-rc1 matches version "0.13.0-rc1" or "0.13.0" in pyproject.toml
+      - name: Check tag matches pyproject version
+        run: |
+          version=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "IMAGE_TAG=$version" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$version" ] && [ "${tag%%-*}" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pyproject.toml version $version"
+            exit 1
+          fi
+          echo "IMAGE_TAG=$tag" >> "$GITHUB_ENV"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::381491825451:role/ghrsst-github-actions
+          aws-region: us-west-2
+      - run: make get-ecr-login
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Pre-releases (v0.13.0-rc1) don't move :latest. Shares the layer cache with
+      # lint-build-test, so rasterio usually isn't recompiled.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: final
+          platforms: linux/amd64
+          push: true
+          # Lambda can't use the OCI index/attestations buildx adds by default
+          provenance: false
+          tags: |
+            ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+            ${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') && format('{0}:latest', env.IMAGE) || '' }}
+          cache-from: type=gha

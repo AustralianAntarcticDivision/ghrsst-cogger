@@ -1,6 +1,6 @@
 [project]
 name = "ghrsst-cogger"
-version = "0.13.0"
+version = "0.13.0-rc1"
 description = "Convert GHRSST MUR NetCDF to Cloud Optimised GeoTIFFs with STAC metadata"
 readme = "README.md"
 requires-python = "==3.12.*"

@@ -337,6 +337,8 @@ resource "aws_lambda_function" "parquet" {
 
   environment {
     variables = {
+      # TODO: "2000-01-01" is the applied value. Which is correct?
+      # Applying 2003-05-30 would remove about a year of data from the GeoParquet.
       START_DATE      = "2003-05-30",
       OUTPUT_LOCATION = "s3://${var.destination_bucket_path}",
     }
@@ -362,4 +364,59 @@ resource "aws_lambda_permission" "allow_cloudwatch_to_call_parquet" {
   function_name = aws_lambda_function.parquet.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.parquet.arn
+}
+
+# GitHub Actions pushes release images to ECR using OIDC, no stored AWS keys.
+# Only one provider per URL is allowed per account, so other repos in this account
+# should reference this one rather than create their own.
+resource "aws_iam_openid_connect_provider" "github" {
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+}
+
+resource "aws_iam_role" "github_actions" {
+  name = "ghrsst-github-actions"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+      Condition = {
+        StringEquals = { "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com" }
+        # Only version tags on the upstream repo, not forks or branches
+        StringLike = { "token.actions.githubusercontent.com:sub" = "repo:AustralianAntarcticDivision/ghrsst-cogger:ref:refs/tags/v*" }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "github_actions_ecr_push" {
+  name = "ghrsst-github-actions-ecr-push"
+  role = aws_iam_role.github_actions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:CompleteLayerUpload",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:InitiateLayerUpload",
+          "ecr:PutImage",
+          "ecr:UploadLayerPart",
+        ]
+        Resource = aws_ecr_repository.ghrsst.arn
+      },
+    ]
+  })
 }
