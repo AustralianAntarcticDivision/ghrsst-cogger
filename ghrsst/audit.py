@@ -118,7 +118,7 @@ def main(start, end, output_location, csv_path):
     for status, count in counts.most_common():
         click.echo(f"  {status}: {count}")
     for row in rows:
-        if row["status"] in ("unsure", "missing"):
+        if row["status"] in ("no_cmr_record", "missing"):
             click.echo(f"  {row['status']} {row['date']}: {row['reason']}")
 
 

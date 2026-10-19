@@ -501,21 +501,32 @@ def classify(
 ) -> tuple[str, str]:
     """Whether a date's COG was made from the preliminary (NRT) or final NetCDF.
 
-    Returns (status, reason), where status is preliminary, final, unsure, missing
-    or no_data.
+    Returns (status, reason), each a fixed string per rule:
+
+    | status         | reason                        | when                         |
+    |----------------|-------------------------------|------------------------------|
+    | no_cmr_granule | No COG and no CMR granule     | neither exists (e.g. today)  |
+    | missing        | No COG                        | CMR granule but no COG       |
+    | no_cmr_record  | No CMR record to compare with | COG but no CMR granule       |
+    | preliminary    | NetCDF regenerated after COG  | source produced > COG        |
+    | final          | COG written from final NetCDF | COG >= source, source +9d    |
+    | preliminary    | COG written from NRT NetCDF   | COG >= source, source < +9d  |
+
+    The last rule is the only one that relies on MUR's 9-day finalisation lag: dates
+    can't tell a not-yet-replaced NRT NetCDF from a final one. The NetCDF's own
+    `title` ("Daily MUR SST, Final product") would, but needs downloading.
     """
     if cog_written is None:
         if source_produced is None:
-            return "no_data", "no COG or CMR record"
-        return "missing", "no COG"
+            return "no_cmr_granule", "No COG and no CMR granule"
+        return "missing", "No COG"
     if source_produced is None:
-        return "unsure", "no CMR record to compare with"
+        return "no_cmr_record", "No CMR record to compare with"
     if source_produced > cog_written:
-        return "preliminary", "NetCDF regenerated after the COG was written"
-    source_lag = (source_produced.date() - day).days
-    if source_lag >= FINAL_SOURCE_LAG_DAYS:
-        return "final", f"COG written from the final NetCDF (produced +{source_lag}d)"
-    return "preliminary", f"COG written from the NRT NetCDF (produced +{source_lag}d)"
+        return "preliminary", "NetCDF regenerated after COG"
+    if (source_produced.date() - day).days >= FINAL_SOURCE_LAG_DAYS:
+        return "final", "COG written from final NetCDF"
+    return "preliminary", "COG written from NRT NetCDF"
 
 
 def process_date(

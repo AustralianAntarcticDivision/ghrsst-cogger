@@ -11,7 +11,10 @@ def at(day: int, month: int = 12, year: int = 2025) -> datetime:
 
 def test_cog_older_than_netcdf_is_preliminary():
     # Written at +2, final NetCDF produced at +9
-    assert classify(DAY, at(12), at(19))[0] == "preliminary"
+    assert classify(DAY, at(12), at(19)) == (
+        "preliminary",
+        "NetCDF regenerated after COG",
+    )
 
 
 def test_cog_from_final_netcdf_is_final():
@@ -26,16 +29,19 @@ def test_reprocessed_old_date_is_final():
 
 def test_cog_from_nrt_netcdf_is_preliminary():
     # The NetCDF itself hasn't been replaced by the final yet
-    assert classify(DAY, at(12), at(11))[0] == "preliminary"
+    assert classify(DAY, at(12), at(11)) == (
+        "preliminary",
+        "COG written from NRT NetCDF",
+    )
 
 
-def test_no_cmr_record_is_unsure():
-    assert classify(DAY, at(12), None)[0] == "unsure"
+def test_cog_without_cmr_record():
+    assert classify(DAY, at(12), None)[0] == "no_cmr_record"
 
 
 def test_no_cog_is_missing():
     assert classify(DAY, None, at(19))[0] == "missing"
-    assert classify(DAY, None, None)[0] == "no_data"
+    assert classify(DAY, None, None)[0] == "no_cmr_granule"
 
 
 def test_parse_matches_granule_ur_not_window():
