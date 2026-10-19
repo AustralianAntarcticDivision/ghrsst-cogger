@@ -177,6 +177,23 @@ def get_simple_raster_info(data: Dataset, var: str):
 def load_data(
     date: datetime, input_location: str, cache_local: bool = False, log: Logger = LOGGER
 ) -> Dataset:
+    """Open the MUR NetCDF for a date, without applying scale/offset or masking.
+
+    Three ways of loading, picked by the arguments:
+
+    - ``cache_local``: download the whole file to /tmp (with Earthdata auth), then open
+      it lazily with dask chunks. Used by the Lambda, and the fastest.
+    - ``input_location="JPL"`` without ``cache_local``: stream the file over HTTP and
+      load it fully into memory.
+    - A local folder without ``cache_local``: open the file from that folder lazily,
+      without dask chunks. Used by the tests and ``make run-local``.
+
+    Args:
+        date (datetime): Date of the file to open
+        input_location (str): 'JPL' to fetch from PO.DAAC, or a local folder holding the file
+        cache_local (bool): Download the file to /tmp before opening it
+        log (Logger): Logger to use
+    """
     input_path = get_input_path(input_location, date)
 
     if cache_local:
@@ -206,6 +223,7 @@ def load_data(
         # except FileNotFoundError as e:
         #     raise GHRSSTException(f"File not found for {input_path} with error {e}")
     else:
+        # TODO: try chunks={} as in the cache_local branch for performance improvement
         data = xr.open_dataset(
             input_path, mask_and_scale=False, drop_variables=DROP_VARIABLES
         )
