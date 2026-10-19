@@ -7,7 +7,9 @@ import click
 import stacrs
 from s3path import S3Path
 
-from ghrsst.cogger import LOGGER, GHRSSTException, get_logger, get_output_path
+from ghrsst.cogger import GHRSSTException, get_logger, get_output_path
+
+LOGGER = get_logger(__name__)
 
 
 async def fetch_all_items(dates, input_location, concurrent_requests=20):
@@ -120,7 +122,7 @@ async def create_parquet(
 
 
 def lambda_handler(event, _):
-    log = get_logger()
+    log = LOGGER
     end_date = datetime.today()
     log.info(f"Event: {event}")
     log.info(f"Working on date: {end_date:%Y-%m-%d}")
@@ -169,7 +171,7 @@ def main(start_date, end_date, input_location, output_location, write_tempfile):
 
     # Only catch known exceptions, and otherwise let the program crash
     try:
-        log = get_logger()
+        log = LOGGER
         result = asyncio.run(
             create_parquet(
                 start_date=start_date,

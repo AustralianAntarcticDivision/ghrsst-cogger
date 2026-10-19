@@ -14,10 +14,11 @@ AFFINE_AFTER = [0.01, 0.0, -179.995, 0.0, -0.01, 89.995, 0.0, 0.0, 1.0]
 
 
 # Need to skip this test in CI because the file is large
+# TODO: use scope="module" if more tests are added, so the file is opened once
 @pytest.fixture
 def xarray_sample():
     if not any((ROOT_FOLDER / LOCAL_FOLDER).glob(f"{LOCAL_FILE_DATE:%Y%m%d}*.nc")):
-        pytest.skip("Sample NetCDF not in data/, see Makefile")
+        pytest.skip("Sample NetCDF not in data/, run `make download-test-data`")
     data = load_data(LOCAL_FILE_DATE, str(ROOT_FOLDER / LOCAL_FOLDER))
 
     return data

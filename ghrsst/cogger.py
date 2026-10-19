@@ -91,8 +91,8 @@ def _get_href(path: Path | S3Path) -> str:
     return href
 
 
-def get_logger():
-    logger = logging.getLogger(__name__)
+def get_logger(name: str = __name__) -> Logger:
+    logger = logging.getLogger(name)
     # Only add the handler once, as warm Lambda containers call this again
     if not logger.handlers:
         handler = logging.StreamHandler()

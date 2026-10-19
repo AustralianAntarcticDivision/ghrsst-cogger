@@ -38,13 +38,9 @@ make lint       # all prek hooks on all files: ruff, ty, uv lock --check
 make run-local  # convert one date from data/ to data/output
 ```
 
-The tests use a sample MUR NetCDF (~700 MB) in `data/`. Download it with an
-[Earthdata login](https://urs.earthdata.nasa.gov/users/new) (`earthaccess` prompts for it,
-or reads `~/.netrc` or `EARTHDATA_USERNAME`/`EARTHDATA_PASSWORD`):
-
-```bash
-uv run python -c "import earthaccess; earthaccess.login(); earthaccess.download(['https://archive.podaac.earthdata.nasa.gov/podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc'], 'data')"
-```
+The tests use a sample MUR NetCDF (~700 MB) in `data/`. Download it with `make download-test-data`,
+which needs an [Earthdata login](https://urs.earthdata.nasa.gov/users/new) (`earthaccess`
+prompts for it, or reads `~/.netrc` or `EARTHDATA_USERNAME`/`EARTHDATA_PASSWORD`).
 
 Add a dependency with `uv add <package>` (or `uv add --dev <package>`), which updates
 `pyproject.toml` and `uv.lock`. Commit both.
