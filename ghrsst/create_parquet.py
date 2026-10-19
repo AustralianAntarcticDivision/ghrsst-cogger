@@ -38,34 +38,6 @@ async def fetch_all_items(dates, input_location, concurrent_requests=20):
     return [item for item in items if item is not None]
 
 
-async def get_items(dates, input_location):
-    location = S3Path(input_location)
-    hrefs = []
-
-    for date in dates:
-        path = get_output_path(location, date, ".stac-item.json")
-        href = str(path).replace(
-            input_location, "https://data.source.coop/ausantarctic/ghrsst-mur-v2"
-        )
-
-        hrefs.append(href)
-
-    print(f"Prepared {len(hrefs)} hrefs")
-
-    async def fetch_item(href):
-        try:
-            item = await rustac.read(href)
-            return item
-        except Exception as e:
-            print(f"Failed to fetch {href} with error {e}")
-            return None
-
-    items = await asyncio.gather(*[fetch_item(href) for href in hrefs])
-    items = [item for item in items if item is not None]
-
-    return items
-
-
 async def create_parquet(
     start_date: datetime,
     end_date: datetime,
