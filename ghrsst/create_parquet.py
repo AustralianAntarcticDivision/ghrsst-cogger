@@ -9,6 +9,8 @@ from s3path import S3Path
 
 from ghrsst.cogger import GHRSSTException, get_logger, get_output_path
 
+LOGGER = get_logger(__name__)
+
 
 async def fetch_all_items(dates, input_location, concurrent_requests=20):
     location = S3Path(input_location)
@@ -65,22 +67,21 @@ async def get_items(dates, input_location):
 
 
 async def create_parquet(
-    start_date: str,
-    end_date: str,
+    start_date: datetime,
+    end_date: datetime,
     input_location: str,
     output_location: str,
     write_tempfile: bool = False,
-    log: Logger = None,
+    log: Logger = LOGGER,
 ) -> int:
     dates = [
         start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)
     ]
 
-    if log is not None:
-        log.info(f"Working from {start_date:%Y-%m-%d} to {end_date:%Y-%m-%d}")
-        log.info(
-            f"Reading from {input_location}, writing to {output_location}, write_tempfile is {write_tempfile}"
-        )
+    log.info(f"Working from {start_date:%Y-%m-%d} to {end_date:%Y-%m-%d}")
+    log.info(
+        f"Reading from {input_location}, writing to {output_location}, write_tempfile is {write_tempfile}"
+    )
 
     items = await fetch_all_items(dates, input_location)
 
@@ -90,8 +91,7 @@ async def create_parquet(
     output_location = output_location.replace("s3:/", "s3://")
     out = f"{output_location}/ghrsst-mur-v2.parquet"
 
-    if log is not None:
-        log.info(f"Writing {len(items)} items to {out}")
+    log.info(f"Writing {len(items)} items to {out}")
 
     if len(items) == 0:
         raise GHRSSTException("No items to write to parquet")
@@ -100,8 +100,7 @@ async def create_parquet(
         if write_tempfile:
             # Write to a memoryfile
             temp_file = "/tmp/ghrsst-mur-v2.parquet"
-            if log is not None:
-                log.info(f"Writing to tempfile at: {temp_file}")
+            log.info(f"Writing to tempfile at: {temp_file}")
             await stacrs.write(temp_file, items)
 
             # Move the tempfile to the final location on S3
@@ -109,8 +108,7 @@ async def create_parquet(
                 S3Path(output_location.replace("s3://", "/")) / "ghrsst-mur-v2.parquet"
             )
 
-            if log is not None:
-                log.info(f"Copying tempfile to S3 at : S3:/{out}")
+            log.info(f"Copying tempfile to S3 at : S3:/{out}")
             with open(temp_file, "rb") as f:
                 out.write_bytes(f.read())
         else:
@@ -124,7 +122,7 @@ async def create_parquet(
 
 
 def lambda_handler(event, _):
-    log = get_logger()
+    log = LOGGER
     end_date = datetime.today()
     log.info(f"Event: {event}")
     log.info(f"Working on date: {end_date:%Y-%m-%d}")
@@ -173,7 +171,7 @@ def main(start_date, end_date, input_location, output_location, write_tempfile):
 
     # Only catch known exceptions, and otherwise let the program crash
     try:
-        log = get_logger()
+        log = LOGGER
         result = asyncio.run(
             create_parquet(
                 start_date=start_date,

@@ -8,12 +8,13 @@ import boto3
 
 from ghrsst.cogger import get_logger
 
-N_PREVIOUS_DAYS = os.environ.get("N_PREVIOUS_DAYS", 7)
+N_PREVIOUS_DAYS = int(os.environ.get("N_PREVIOUS_DAYS", "7"))
 QUEUE_NAME = os.environ.get("QUEUE_NAME", "ghrsst-queue")
+LOGGER = get_logger(__name__)
 
 
 def lambda_handler(event, _):
-    log = get_logger()
+    log = LOGGER
     today = datetime.today()
     log.info(f"Event: {event}")
     log.info(f"Working on date: {today:%Y-%m-%d}")

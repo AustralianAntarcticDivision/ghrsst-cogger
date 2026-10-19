@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from logging import Logger
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Any, TypeGuard
 
 import boto3
 import click
@@ -19,7 +19,7 @@ from botocore.exceptions import ClientError
 from earthaccess import get_edl_token, login
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import assign_crs, xr_coords
-from pystac import Asset, Item, MediaType, Link, RelType
+from pystac import Asset, Item, Link, MediaType, RelType
 from rio_stac import create_stac_item
 from s3path import S3Path
 from xarray import Dataset
@@ -39,7 +39,7 @@ VARIABLES = [
 # Not loading or writing the datetime data
 DROP_VARIABLES = ["dt_1km_data"]
 VARIABLES = [var for var in VARIABLES if var not in DROP_VARIABLES]
-COG_OPTS = dict(compress="zstd")
+COG_OPTS: dict[str, Any] = dict(compress="zstd")
 
 
 class GHRSSTException(Exception):
@@ -63,11 +63,11 @@ def environ(env):
                 os.environ[key] = value
 
 
-def _is_s3_path(path: Union[Path, S3Path]) -> bool:
+def _is_s3_path(path: Path | S3Path) -> TypeGuard[S3Path]:
     return isinstance(path, S3Path)
 
 
-def _exists(path: Union[Path, S3Path]) -> bool:
+def _exists(path: Path | S3Path) -> bool:
     if _is_s3_path(path):
         try:
             s3 = boto3.client("s3")
@@ -79,7 +79,7 @@ def _exists(path: Union[Path, S3Path]) -> bool:
         return path.exists()
 
 
-def _get_href(path: Union[Path, S3Path]) -> str:
+def _get_href(path: Path | S3Path) -> str:
     href = str(path)
     if _is_s3_path(path):
         # Assume we're writing to source.coop
@@ -90,29 +90,27 @@ def _get_href(path: Union[Path, S3Path]) -> str:
 
     return href
 
-def get_logger():
-    logger = logging.getLogger(__name__)
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    )
 
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+def get_logger(name: str = __name__) -> Logger:
+    logger = logging.getLogger(name)
+    # Only add the handler once, as warm Lambda containers call this again
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
     return logger
 
 
-# If we're in Lambda, create a logger
-LOGGER = None
-if os.environ.get("AWS_EXECUTION_ENV") is not None:
-    LOGGER = get_logger()
+# Module logger, used as the default for functions that take a log argument
+LOGGER = get_logger()
 
 
-def get_output_path(
-    output_location: Union[Path, S3Path], date: datetime, extension: str
-):
+def get_output_path(output_location: Path | S3Path, date: datetime, extension: str):
     return (
         output_location
         / FOLDER_PATH.format(date=date)
@@ -145,7 +143,8 @@ def get_headers() -> dict[str, str]:
     if earthdata_token is None:
         auth = login(strategy="environment")
         if auth.authenticated:
-            earthdata_token = get_edl_token()["access_token"]
+            # earthaccess annotates get_edl_token() as str, but it returns a dict
+            earthdata_token = get_edl_token()["access_token"]  # ty: ignore[invalid-argument-type]
         else:
             raise GHRSSTException("Failed to authenticate with Earthdata")
 
@@ -176,7 +175,7 @@ def get_simple_raster_info(data: Dataset, var: str):
 
 
 def load_data(
-    date: datetime, input_location: Path, cache_local: bool = False, log: Logger = None
+    date: datetime, input_location: str, cache_local: bool = False, log: Logger = LOGGER
 ) -> Dataset:
     input_path = get_input_path(input_location, date)
 
@@ -202,7 +201,7 @@ def load_data(
         except ClientResponseError as e:
             raise GHRSSTException(
                 f"Failed to open {input_path} with error {e}. Please check your EARTHDATA_TOKEN."
-            )
+            ) from e
         # Don't catch this here. Catch it elsewhere and handle differently.
         # except FileNotFoundError as e:
         #     raise GHRSSTException(f"File not found for {input_path} with error {e}")
@@ -247,18 +246,19 @@ def process_data(data: Dataset) -> Dataset:
 def write_data(
     data: Dataset,
     date: datetime,
-    output_location: Union[Path, S3Path],
+    output_location: Path | S3Path,
     overwrite: bool = False,
-    log: Logger | None = None,
-):
+    log: Logger = LOGGER,
+) -> list[tuple[str, Path | S3Path]]:
     if not _is_s3_path(output_location):
         if not output_location.exists():
             output_location.mkdir(parents=True)
 
     data = data.chunk({"time": 1, "lat": 500, "lon": 500})
 
-    written_files = []
-    for var in data.data_vars:
+    written_files: list[tuple[str, Path | S3Path]] = []
+    # xarray types variable names as Hashable; ours are always str
+    for var in map(str, data.data_vars):
         cog_file = get_output_path(output_location, date, f"_{var}.tif")
 
         if _exists(cog_file) and not overwrite:
@@ -292,9 +292,11 @@ def write_data(
 
         # Use the private method, forcing the geobox
         from odc.geo.cog._rio import _get_gdal_metadata, _write_cog
+
+        # The private API is annotated as taking an ndarray but accepts a DataArray
         cog_file.write_bytes(
             _write_cog(
-                data_var,
+                data_var,  # ty: ignore[invalid-argument-type]
                 data.odc.geobox,
                 ":mem:",
                 nodata=data_var.attrs.get("nodata"),
@@ -303,8 +305,7 @@ def write_data(
             )
         )
 
-        if log is not None:
-            log.info(f"Finished writing {var}")
+        log.info(f"Finished writing {var}")
 
         written_files.append((var, cog_file))
 
@@ -313,10 +314,10 @@ def write_data(
 
 def write_stac(
     data: Dataset,
-    written_files: Tuple[Tuple[str, Path]],
+    written_files: list[tuple[str, Path | S3Path]],
     date: datetime,
-    output_location: Union[Path, S3Path],
-    log: Logger | None = None
+    output_location: Path | S3Path,
+    log: Logger = LOGGER,
 ) -> Item:
     stac_file = get_output_path(output_location, date, ".stac-item.json")
 
@@ -399,10 +400,10 @@ def get_context() -> dict[str, str]:
 def process_date(
     date: datetime,
     input_location: str,
-    output_location: Union[Path, S3Path],
+    output_location: Path | S3Path,
     overwrite: bool = False,
     cache_local: bool = False,
-    log: logging.Logger = None,
+    log: Logger = LOGGER,
 ):
     """Process a date from a data source and output to a location
 
@@ -411,9 +412,6 @@ def process_date(
         input_location (str): Either 'jpl' to grab data from JPL, or a local folder to find the data in
         output_location (str): Location to output results to
     """
-    if log is None:
-        log = get_logger()
-
     log.info(
         f"Processing date {date:%Y-%m-%d} from {input_location} to {output_location}"
     )

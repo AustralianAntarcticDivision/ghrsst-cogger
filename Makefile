@@ -42,11 +42,21 @@ test-docker:
 	docker run --rm -v $(PWD)/data:/code/data ghrsst-cogger:test
 
 # CODE TESTING STUFF
+# Sample NetCDF for the tests (~700 MB). Needs an Earthdata login, see README
+download-test-data: data/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc
+
 test:
-	pytest tests/
+	uv run pytest tests/
+
+lint:
+	uv run prek run --all-files
+
+format:
+	uv run ruff check --fix .
+	uv run ruff format .
 
 data/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc:
-	echo "Go get the file!"
+	uv run python -c "import earthaccess; earthaccess.login(); earthaccess.download(['https://archive.podaac.earthdata.nasa.gov/podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/$(notdir $@)'], 'data')"
 
 run-source-coop:
 	python3 ghrsst/cogger.py \
@@ -84,4 +94,3 @@ run-dl-cache: data/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc
 		--output-location data/output \
 		--overwrite \
 		--cache-local
-

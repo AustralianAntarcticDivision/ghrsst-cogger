@@ -25,15 +25,22 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/). Python 3.12 is p
 rasterio is built from source against the system GDAL (`no-binary-package` in
 `pyproject.toml`) rather than using the wheel's bundled GDAL, so the COG writing uses the
 same GDAL as the Docker image. This means `uv sync` needs GDAL installed locally
-(e.g. `brew install gdal`, so that `gdal-config` is on the `PATH`).
+(e.g. `brew install gdal`, so that `gdal-config` is on the `PATH`). rasterio links to that
+GDAL, so after upgrading GDAL, rebuild it with `uv sync --reinstall-package rasterio`.
 
 ```bash
 uv sync
 source .venv/bin/activate
+prek install  # run ruff, ty and file checks on each commit
 
 make test       # tests that need the sample NetCDF in data/ are skipped without it
+make lint       # all prek hooks on all files: ruff, ty, uv lock --check
 make run-local  # convert one date from data/ to data/output
 ```
+
+The tests use a sample MUR NetCDF (~700 MB) in `data/`. Download it with `make download-test-data`,
+which needs an [Earthdata login](https://urs.earthdata.nasa.gov/users/new) (`earthaccess`
+prompts for it, or reads `~/.netrc` or `EARTHDATA_USERNAME`/`EARTHDATA_PASSWORD`).
 
 Add a dependency with `uv add <package>` (or `uv add --dev <package>`), which updates
 `pyproject.toml` and `uv.lock`. Commit both.
