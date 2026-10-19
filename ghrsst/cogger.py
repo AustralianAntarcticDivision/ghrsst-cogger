@@ -3,11 +3,13 @@
 import json
 import logging
 import os
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from logging import Logger
 from pathlib import Path
 from typing import Any, TypeGuard
+from xml.etree import ElementTree
 
 import boto3
 import click
@@ -23,8 +25,10 @@ from earthaccess import get_edl_token, login
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import assign_crs, xr_coords
 from pystac import Asset, Item, Link, MediaType, RelType
+from requests.adapters import HTTPAdapter
 from rio_stac import create_stac_item
 from s3path import S3Path
+from urllib3.util.retry import Retry
 from xarray import Dataset
 
 COLLECTION = "ghrsst-mur-v2"
@@ -33,8 +37,26 @@ FOLDER_PATH = "{date:%Y}/{date:%m}/{date:%d}"
 JPL_BASE = "https://archive.podaac.earthdata.nasa.gov/podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/"
 CMR_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 CMR_SHORT_NAME = "MUR-JPL-L4-GLOB-v4.1"
-# MUR's final NetCDF is produced 9 days after the granule date; the NRT one after ~1 day
-FINAL_SOURCE_LAG_DAYS = 9
+# NetCDF metadata (no data) via OPeNDAP. Collection from the granules' CMR RelatedUrls
+OPENDAP_DMR_URL = (
+    "https://opendap.earthdata.nasa.gov/collections/C1996881146-POCLOUD/granules/"
+    "{granule}.dmr.xml"
+)
+# Shared HTTP session for CMR and OPeNDAP that retries transient server errors.
+# raise_on_status=False hands the last response back so raise_for_status can report it
+HTTP = requests.Session()
+HTTP.mount(
+    "https://",
+    HTTPAdapter(
+        max_retries=Retry(
+            total=3,
+            backoff_factor=5,
+            status_forcelist=(500, 502, 503, 504),
+            raise_on_status=False,
+        ),
+        pool_maxsize=16,
+    ),
+)
 VARIABLES = [
     "analysed_sst",
     "analysis_error",
@@ -449,7 +471,7 @@ def parse_production_times(umm_json: dict) -> dict[date, datetime]:
 def get_production_times(start: date, end: date) -> dict[date, datetime]:
     """When each MUR NetCDF from start to end (inclusive) was last produced, from CMR."""
     try:
-        response = requests.get(
+        response = HTTP.get(
             CMR_URL,
             params={
                 "short_name": CMR_SHORT_NAME,
@@ -481,6 +503,28 @@ def get_production_times(start: date, end: date) -> dict[date, datetime]:
     return parse_production_times(umm_json)
 
 
+def parse_title(dmr_xml: str) -> str | None:
+    """The NetCDF's global `title` attribute from an OPeNDAP DMR document."""
+    value = ElementTree.fromstring(dmr_xml).find(
+        ".//{*}Attribute[@name='title']/{*}Value"
+    )
+    return value.text.strip() if value is not None and value.text else None
+
+
+def get_source_title(day: date, headers: dict[str, str]) -> str | None:
+    """The current MUR NetCDF's title ("... Final product" or "... (nrt) product")."""
+    granule = FILE_STRING.format(date=day).removesuffix(".nc")
+    try:
+        response = HTTP.get(
+            OPENDAP_DMR_URL.format(granule=granule), headers=headers, timeout=120
+        )
+        response.raise_for_status()
+        return parse_title(response.text)
+    except (requests.RequestException, ElementTree.ParseError) as e:
+        LOGGER.warning(f"Couldn't read the NetCDF title for {day}: {e}")
+        return None
+
+
 def get_cog_mtime(output_location: Path | S3Path, date: datetime) -> datetime | None:
     """When the date's analysed_sst COG was written (all its COGs are written together)."""
     cog = get_output_path(output_location, date, "_analysed_sst.tif")
@@ -497,24 +541,28 @@ def get_cog_mtime(output_location: Path | S3Path, date: datetime) -> datetime | 
 
 
 def classify(
-    day: date, cog_written: datetime | None, source_produced: datetime | None
+    day: date,
+    cog_written: datetime | None,
+    source_produced: datetime | None,
+    source_title: Callable[[], str | None],
 ) -> tuple[str, str]:
     """Whether a date's COG was made from the preliminary (NRT) or final NetCDF.
 
+    `source_title` returns the current NetCDF's `title`. It's only called when the COG
+    was written from the current NetCDF, as fetching it is a network request.
+
     Returns (status, reason), each a fixed string per rule:
 
-    | status         | reason                        | when                         |
-    |----------------|-------------------------------|------------------------------|
-    | no_cmr_granule | No COG and no CMR granule     | neither exists (e.g. today)  |
-    | missing        | No COG                        | CMR granule but no COG       |
-    | no_cmr_record  | No CMR record to compare with | COG but no CMR granule       |
-    | preliminary    | NetCDF regenerated after COG  | source produced > COG        |
-    | final          | COG written from final NetCDF | COG >= source, source +9d    |
-    | preliminary    | COG written from NRT NetCDF   | COG >= source, source < +9d  |
-
-    The last rule is the only one that relies on MUR's 9-day finalisation lag: dates
-    can't tell a not-yet-replaced NRT NetCDF from a final one. The NetCDF's own
-    `title` ("Daily MUR SST, Final product") would, but needs downloading.
+    | status         | reason                        | when                             |
+    |----------------|-------------------------------|----------------------------------|
+    | no_cmr_granule | No COG and no CMR granule     | neither exists (e.g. today)      |
+    | missing        | No COG                        | CMR granule but no COG           |
+    | no_cmr_record  | No CMR record to compare with | COG but no CMR granule           |
+    | preliminary    | NetCDF regenerated after COG  | source produced > COG written    |
+    | final          | COG written from final NetCDF | COG >= source, "Final product"   |
+    | preliminary    | COG written from NRT NetCDF   | COG >= source, "near-real-time"  |
+    | title_unknown  | Couldn't read NetCDF title    | COG >= source, title unreadable  |
+    | title_unknown  | Unrecognised NetCDF title     | COG >= source, any other title   |
     """
     if cog_written is None:
         if source_produced is None:
@@ -524,9 +572,15 @@ def classify(
         return "no_cmr_record", "No CMR record to compare with"
     if source_produced > cog_written:
         return "preliminary", "NetCDF regenerated after COG"
-    if (source_produced.date() - day).days >= FINAL_SOURCE_LAG_DAYS:
+    # The COG was made from the current NetCDF, so it's final if that NetCDF is
+    title = source_title()
+    if title is None:
+        return "title_unknown", "Couldn't read NetCDF title"
+    if "Final product" in title:
         return "final", "COG written from final NetCDF"
-    return "preliminary", "COG written from NRT NetCDF"
+    if "near-real-time" in title:
+        return "preliminary", "COG written from NRT NetCDF"
+    return "title_unknown", "Unrecognised NetCDF title"
 
 
 def process_date(
@@ -548,9 +602,13 @@ def process_date(
             (status, reason). Never downloads or writes anything.
     """
     if audit:
+        headers = get_headers()
         produced = get_production_times(date.date(), date.date()).get(date.date())
         status, reason = classify(
-            date.date(), get_cog_mtime(output_location, date), produced
+            date.date(),
+            get_cog_mtime(output_location, date),
+            produced,
+            lambda: get_source_title(date.date(), headers),
         )
         log.info(f"Audit {date:%Y-%m-%d}: {status} ({reason})")
         return status, reason
