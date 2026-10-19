@@ -43,14 +43,14 @@ test-docker:
 
 # CODE TESTING STUFF
 test:
-	pytest tests/
+	uv run pytest tests/
 
 lint:
-	prek run --all-files
+	uv run prek run --all-files
 
 format:
-	ruff check --fix .
-	ruff format .
+	uv run ruff check --fix .
+	uv run ruff format .
 
 data/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc:
 	echo "Go get the file!"
