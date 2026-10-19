@@ -33,10 +33,6 @@ dev = [
     "ty>=0.0.89",
 ]
 
-[tool.uv]
-# Build rasterio against the system GDAL in the Docker image
-no-binary-package = ["rasterio"]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
