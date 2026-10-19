@@ -22,6 +22,11 @@ The architecture for this process has the following components:
 Dependencies are managed with [uv](https://docs.astral.sh/uv/). Python 3.12 is pinned in
 `.python-version` and uv will download it if needed.
 
+rasterio is built from source against the system GDAL (`no-binary-package` in
+`pyproject.toml`) rather than using the wheel's bundled GDAL, so the COG writing uses the
+same GDAL as the Docker image. This means `uv sync` needs GDAL installed locally
+(e.g. `brew install gdal`, so that `gdal-config` is on the `PATH`).
+
 ```bash
 uv sync
 source .venv/bin/activate

@@ -1,12 +1,14 @@
 FROM ghcr.io/osgeo/gdal:ubuntu-small-3.12.3 AS base
 
 RUN apt-get update && apt-get install -y \
-    python3-dev git build-essential pkg-config \
+    python3-dev build-essential \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /usr/local/bin/
 # Use the base image's Python 3.12 (Ubuntu 24.04), matching .python-version
-ENV UV_PROJECT_ENVIRONMENT=/code/.venv UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
+# Compile .pyc at build time so Lambda cold starts skip it
+ENV UV_PROJECT_ENVIRONMENT=/code/.venv UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never \
+    UV_COMPILE_BYTECODE=1
 WORKDIR /code
 
 # Dependencies first so code changes don't rebuild this layer.
