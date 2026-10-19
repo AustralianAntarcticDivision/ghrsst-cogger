@@ -29,7 +29,7 @@ get-ecr-login:
 
 # Run with `make build VERSION=0.1.0`
 build:
-	docker buildx build --platform linux/amd64 -t ghrsst-cogger:latest .
+	docker buildx build --platform linux/amd64 --target final -t ghrsst-cogger:latest .
 	docker tag ghrsst-cogger:latest 381491825451.dkr.ecr.us-west-2.amazonaws.com/ghrsst-cogger:latest
 	docker tag ghrsst-cogger:latest 381491825451.dkr.ecr.us-west-2.amazonaws.com/ghrsst-cogger:$(VERSION)
 
@@ -37,7 +37,14 @@ push:
 	docker push 381491825451.dkr.ecr.us-west-2.amazonaws.com/ghrsst-cogger:latest
 	docker push 381491825451.dkr.ecr.us-west-2.amazonaws.com/ghrsst-cogger:$(VERSION)
 
+test-docker:
+	docker buildx build --platform linux/amd64 --target test -t ghrsst-cogger:test .
+	docker run --rm -v $(PWD)/data:/code/data ghrsst-cogger:test
+
 # CODE TESTING STUFF
+test:
+	pytest tests/
+
 data/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc:
 	echo "Go get the file!"
 

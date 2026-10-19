@@ -24,9 +24,12 @@ AFFINE_BEFORE = [
 AFFINE_AFTER = [0.01, 0.0, -180.0, 0.0, 0.01, -89.995, 0.0, 0.0, 1.0]
 
 
+# Need to skip this test in CI because the file is large
 @pytest.fixture
 def xarray_sample():
-    data = load_data(LOCAL_FILE_DATE, str(ROOT_FOLDER / LOCAL_FOLDER))
+    if not any((ROOT_FOLDER / LOCAL_FOLDER).glob(f"{LOCAL_FILE_DATE:%Y%m%d}*.nc")):
+        pytest.skip("Sample NetCDF not in data/, see Makefile")
+    data =load_data(LOCAL_FILE_DATE, str(ROOT_FOLDER / LOCAL_FOLDER))
 
     return data
 

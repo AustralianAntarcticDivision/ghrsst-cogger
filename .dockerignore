@@ -1,3 +1,7 @@
-data
-terraform
-*.ipynb
+*
+!pyproject.toml
+!uv.lock
+!.python-version
+!README.md
+!ghrsst
+!tests
