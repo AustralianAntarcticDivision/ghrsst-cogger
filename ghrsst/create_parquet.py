@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from logging import Logger
 
 import click
-import stacrs
+import rustac
 from s3path import S3Path
 
 from ghrsst.cogger import GHRSSTException, get_logger, get_output_path
@@ -26,7 +26,7 @@ async def fetch_all_items(dates, input_location, concurrent_requests=20):
     async def fetch_item(href, semaphore):
         async with semaphore:
             try:
-                return await stacrs.read(href)
+                return await rustac.read(href)
             except Exception as e:
                 print(f"Failed to fetch {href} with error {e}")
                 return None
@@ -54,7 +54,7 @@ async def get_items(dates, input_location):
 
     async def fetch_item(href):
         try:
-            item = await stacrs.read(href)
+            item = await rustac.read(href)
             return item
         except Exception as e:
             print(f"Failed to fetch {href} with error {e}")
@@ -101,7 +101,7 @@ async def create_parquet(
             # Write to a memoryfile
             temp_file = "/tmp/ghrsst-mur-v2.parquet"
             log.info(f"Writing to tempfile at: {temp_file}")
-            await stacrs.write(temp_file, items)
+            await rustac.write(temp_file, items)
 
             # Move the tempfile to the final location on S3
             out = (
@@ -114,9 +114,9 @@ async def create_parquet(
         else:
             # Write direct to S3
             log.info(f"Writing {len(items)} items to S3 at: {out}")
-            await stacrs.write(out, items)
+            await rustac.write(out, items)
     else:
-        await stacrs.write(out, items)
+        await rustac.write(out, items)
 
     return len(items)
 

@@ -59,7 +59,7 @@ sst_scaled.plot.imshow(size=8, robust=True, cmap="inferno")
 Alternately, you can use the STAC Parquet file as an index to all the STAC docs.
 
 ```python
-import stacrs
+import rustac
 import pystac
 from odc.stac import load
 
@@ -75,17 +75,17 @@ bbox = (
     center[0] + buffer,
 )
 
-items = await stacrs.read(url)
+items = (await rustac.read(url))["features"]
 
-# Or use .search to filter by time
+# Or use .search to filter by place and time, which returns a list of items
 # year = 2024
-# items = stacrs.search(
+# items = await rustac.search(
 #     url,
 #     bbox=bbox,
 #     datetime=f"{year}-01-01T00:00:00.000Z/{year}-12-31T23:59:59.999Z",
 # )
 
-items = [pystac.Item.from_dict(i) for i in items["features"]]
+items = [pystac.Item.from_dict(i) for i in items]
 
 data = load(items, bbox=bbox, chunks={})
 data
