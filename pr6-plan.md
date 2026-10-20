@@ -16,14 +16,31 @@ PR 6:
 
 Decisions (agreed): richer status values plus provenance; backfill through the queue, with the Lambda re-deriving each status at processing time.
 
-## STAC item changes (per stac-spec #179: a minimal discovery label plus a `derived_from` link)
-New properties:
+## STAC item changes
+The approach follows stac-spec #179: a minimal label for discovery, a `derived_from` link to the source, and provenance in the standard [Processing extension](https://github.com/stac-extensions/processing) (v1.3.0, Candidate).
+
+**Status label (custom, for filtering).** The Processing extension has no preliminary/final field, and `processing:lineage` is free text, so a simple filterable label is custom:
 - `ghrsst:status`: `final` | `preliminary` | `nrt_only`
   - `final`: made from the final NetCDF.
   - `preliminary`: made from an NRT NetCDF whose final is still to come.
   - `nrt_only`: the archived NetCDF is still NRT more than `NRT_ONLY_AFTER` (60 days) after the date, so no final was published.
-- `ghrsst:source_produced`: CMR `ProductionDateTime` of the converted NetCDF.
-- `ghrsst:source_published`: archive `Last-Modified` of the converted NetCDF.
+
+**Provenance (Processing extension).** Add `https://stac-extensions.github.io/processing/v1.3.0/schema.json` to the item's `stac_extensions`.
+
+| Field | Value | Source |
+|---|---|---|
+| `processing:lineage` | the source NetCDF's own title, e.g. `"Daily MUR SST, Final product"` | NetCDF `title` attribute |
+| `processing:datetime` | when JPL produced the source NetCDF | CMR `ProductionDateTime` |
+| `processing:facility` | `"NASA JPL"` | constant |
+| `processing:version` | the MUR product version, e.g. `"04.1"` | NetCDF `product_version` attribute |
+| `processing:level` | `"L4"` | NetCDF `processing_level` attribute |
+| `processing:software` | e.g. `{"ghrsst-cogger": "0.13.0", "rasterio": "1.5.2", "GDAL": "3.12.2", "odc-geo": "0.5.3"}` | `importlib.metadata` and `rasterio.__gdal_version__` |
+
+- `processing:software` is only written when a COG is (re)made. A status-only patch can't know the versions that made the existing COG, so it leaves this field unset (or as it was).
+- After the backfill, re-COGed items therefore say which software made them, which makes reprocessing traceable.
+
+**Custom provenance with no standard field:**
+- `ghrsst:source_published`: the archive `Last-Modified` of the converted NetCDF. It's when PO.DAAC published it, which the audit's rules depend on.
 
 Links: the "Original NetCDF" link's `rel` changes from `canonical` (strictly, the authoritative copy of *this item*) to `derived_from` (the source it was made from). The title stays "Original NetCDF".
 
@@ -57,8 +74,10 @@ The COG is only rewritten when that changes the data. Everything else exits earl
   | `*_unknown`, `no_cmr_record` | `retry`: raise `GHRSSTException`, so SQS retries, then sends it to the DLQ |
   | `no_cmr_granule` | `skip`: nothing published yet |
 
-- **`write_stac(..., status, source_produced, source_published)`**: add the three properties and the `derived_from` link. Move the S3 `put_object` and local-save code into `_write_json(stac_file, dict)`, so it's reused.
-- **`set_stac_status(output_location, date, status, produced, published)`**: read the existing STAC JSON (S3 `get_object` / local), set the properties, switch `canonical` → `derived_from`, and write it back with `_write_json`.
+- **`source_provenance(...) -> dict`**: builds the `processing:*` and `ghrsst:source_published` properties from the NetCDF attributes (when converting), the CMR production time and the publication time. `processing:software` is only included when converting.
+- **`write_stac(..., status, provenance)`**: add `ghrsst:status`, the provenance properties, the Processing extension schema URL and the `derived_from` link. Move the S3 `put_object` and local-save code into `_write_json(stac_file, dict)`, so it's reused.
+- **`set_stac_status(output_location, date, status, provenance)`**: read the existing STAC JSON (S3 `get_object` / local), set `ghrsst:status` and the provenance properties, add the extension URL, switch `canonical` → `derived_from`, and write it back with `_write_json`.
+  - The lineage, version and level come from the NetCDF title and attributes, read from the file header the audit already reads (~1 MB). They're not guessed.
 - **`process_date` (non-audit)**: replaces "skip if a STAC item exists":
   1. Read the existing STAC item. If its `ghrsst:status` is `final` and not `overwrite` → skip. This is one S3 GET, and it covers most daily checks.
   2. No STAC item or COG, or `overwrite` → convert. The status comes from the downloaded file's title; S comes from `get_production_times` and P from `get_source_published` (a HEAD request made **before** the download).
@@ -81,13 +100,15 @@ The COG is only rewritten when that changes the data. Everything else exits earl
 - `prod.tfvars`: `image_tag` → the release built from this PR.
 
 ### Docs
-- `readme_for_source_coop.md`: document `ghrsst:status` (with its 3 values), the two timestamps and `derived_from`, plus a GeoParquet filter example. Publish with `make update-readme` after deploying.
+- `readme_for_source_coop.md`: document `ghrsst:status` (with its 3 values), the `processing:*` fields, `ghrsst:source_published` and `derived_from`, plus a GeoParquet filter example (e.g. `ghrsst:status = 'final'`). Publish with `make update-readme` after deploying.
 - `README.md`: the finalise flow (daily look-back, status sources, backfill command).
 
 ### Tests (`tests/test_audit.py` or a new `tests/test_status.py`, network-free)
 - `status_from_title` for each title and age.
 - `action_for` for every status/reason.
-- `set_stac_status` on a local STAC item in `tmp_path`: properties set, `canonical` → `derived_from`.
+- `set_stac_status` on a local STAC item in `tmp_path`: status and provenance set, the Processing extension URL added, `canonical` → `derived_from`, and existing `processing:software` left alone.
+- `source_provenance`: maps NetCDF attributes and times to the `processing:*` fields, and only includes software when converting.
+- Validate a written item against the STAC and Processing extension JSON schemas (e.g. `pystac`'s `item.validate()`).
 
 ## Rollout
 1. Merge after #12. Bump `version` (e.g. `0.13.0`) and tag `v0.13.0`; the release workflow pushes the image.
@@ -108,7 +129,7 @@ The COG is only rewritten when that changes the data. Everything else exits earl
 ## Verification
 - `make lint` and `make test` (the new unit tests).
 - Local end-to-end into `data/output`:
-  - Convert a date → the STAC item has `ghrsst:status: final`, both timestamps and a `derived_from` link.
+  - Convert a date → the STAC item has `ghrsst:status: final`, the `processing:*` fields, `ghrsst:source_published` and a `derived_from` link, and passes schema validation.
   - Run `process_date` again → skipped because it's `final`.
   - Strip the status from a copy → `set_status` path.
-- After deploying: the smoke-test dates above, the DLQ empty after the backfill, and the GeoParquet `ghrsst:status` value counts matching the audit.
+- After deploying: the smoke-test dates above, the DLQ empty after the backfill, and the GeoParquet `ghrsst:status` value counts matching the audit, with the `processing:*` columns present.
