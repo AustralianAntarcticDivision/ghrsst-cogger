@@ -1,91 +1,132 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from ghrsst.cogger import classify, parse_production_times, parse_title
+from ghrsst.cogger import classify, parse_production_times
 
 DAY = date(2025, 12, 10)
 FINAL = "Daily MUR SST, Final product"
 NRT = "Daily MUR SST, Interim near-real-time (nrt) product"
 
 
-def at(day: int, month: int = 12, year: int = 2025) -> datetime:
-    return datetime(year, month, day, 8, tzinfo=UTC)
+def at(day: int, month: int = 12, year: int = 2025, hour: int = 8) -> datetime:
+    return datetime(year, month, day, hour, tzinfo=UTC)
 
 
-def title(value: str | None):
-    return lambda: value
+def value(v):
+    return lambda: v
 
 
 def not_needed():
-    pytest.fail("the NetCDF title shouldn't be fetched for this case")
+    pytest.fail("this lookup shouldn't be needed for this case")
 
 
-def test_cog_older_than_netcdf_is_preliminary_without_fetching_title():
+def test_cog_older_than_netcdf_production_is_preliminary_without_lookups():
     # Written at +2, final NetCDF produced at +9
-    assert classify(DAY, at(12), at(19), not_needed) == (
+    assert classify(DAY, at(12), at(19), not_needed, not_needed) == (
         "preliminary",
         "NetCDF regenerated after COG",
     )
 
 
+def test_produced_before_but_published_after_cog_is_preliminary():
+    # The gap ProductionDateTime alone can't see: produced at 07:17, COG at 07:20,
+    # published at 07:32, so the COG was made from the previous file
+    produced = at(19, hour=7)
+    cog = produced + timedelta(minutes=3)
+    published = produced + timedelta(minutes=15)
+    assert classify(DAY, cog, produced, value(published), not_needed) == (
+        "preliminary",
+        "NetCDF published after COG",
+    )
+
+
+def test_cog_soon_after_publication_is_too_close():
+    published = at(19)
+    cog = published + timedelta(minutes=30)
+    assert classify(DAY, cog, at(19, hour=7), value(published), not_needed) == (
+        "too_close",
+        "COG written within 1 h of NetCDF publication",
+    )
+
+
+def test_bulk_run_boundary_is_now_calculated():
+    # 2025-02-01: final produced 07:16:59 and published 07:32:16 on 2025-02-10,
+    # bulk-run COG 2025-02-11 02:32, 19 h after publication, so made from the final
+    produced = datetime(2025, 2, 10, 7, 16, 59, tzinfo=UTC)
+    published = datetime(2025, 2, 10, 7, 32, 16, tzinfo=UTC)
+    cog = datetime(2025, 2, 11, 2, 32, tzinfo=UTC)
+    status = classify(date(2025, 2, 1), cog, produced, value(published), value(FINAL))
+    assert status == ("final", "COG written from final NetCDF")
+
+
+def test_unreadable_publication_time():
+    assert classify(DAY, at(25), at(19), value(None), not_needed) == (
+        "published_unknown",
+        "Couldn't read NetCDF publication time",
+    )
+
+
 def test_cog_from_final_netcdf_is_final():
-    assert classify(DAY, at(25), at(19), title(FINAL)) == (
+    assert classify(DAY, at(25), at(19), value(at(19, hour=9)), value(FINAL)) == (
         "final",
         "COG written from final NetCDF",
     )
 
 
 def test_reprocessed_old_date_is_final():
-    # 2002 granule reprocessed in 2015, COG written in 2025
+    # 2002 granule reprocessed in 2015, re-stored by PO.DAAC in 2024, COG in 2025
     old = date(2002, 6, 1)
-    assert classify(old, at(20, 3, 2025), at(19, 8, 2015), title(FINAL))[0] == "final"
-
-
-def test_early_final_is_final():
-    # Finalised at +4 (as MUR does now), COG written after it
-    assert classify(DAY, at(15), at(14), title(FINAL))[0] == "final"
+    status = classify(
+        old,
+        at(20, 3, 2025),
+        at(19, 8, 2015),
+        value(at(17, 7, 2024)),
+        value(FINAL),
+    )
+    assert status[0] == "final"
 
 
 def test_cog_from_nrt_netcdf_is_preliminary():
     # The NetCDF itself hasn't been replaced by the final yet
-    assert classify(DAY, at(12), at(11), title(NRT)) == (
-        "preliminary",
-        "COG written from NRT NetCDF",
+    recent = date(2025, 12, 20)
+    status = classify(
+        DAY, at(15), at(11), value(at(11, hour=9)), value(NRT), today=recent
+    )
+    assert status == ("preliminary", "COG written from NRT NetCDF")
+
+
+def test_old_nrt_netcdf_is_nrt_only():
+    # e.g. 2015-04-22: NRT produced at +3 and never replaced by a final
+    old = date(2015, 4, 22)
+    produced = datetime(2015, 4, 25, 2, 43, tzinfo=UTC)
+    status = classify(old, at(20, 3, 2025), produced, value(produced), value(NRT))
+    assert status == (
+        "source_nrt_only",
+        "Archived NetCDF is still NRT; no final published",
     )
 
 
 def test_unreadable_or_unknown_title():
-    assert classify(DAY, at(12), at(11), title(None)) == (
+    published = value(at(11, hour=9))
+    assert classify(DAY, at(15), at(11), published, value(None)) == (
         "title_unknown",
         "Couldn't read NetCDF title",
     )
-    assert classify(DAY, at(12), at(11), title("Something else")) == (
+    assert classify(DAY, at(15), at(11), published, value("Something else")) == (
         "title_unknown",
         "Unrecognised NetCDF title",
     )
 
 
 def test_cog_without_cmr_record():
-    assert classify(DAY, at(12), None, not_needed)[0] == "no_cmr_record"
+    status = classify(DAY, at(12), None, not_needed, not_needed)
+    assert status[0] == "no_cmr_record"
 
 
 def test_no_cog_is_missing():
-    assert classify(DAY, None, at(19), not_needed)[0] == "missing"
-    assert classify(DAY, None, None, not_needed)[0] == "no_cmr_granule"
-
-
-def test_parse_title_from_dmr():
-    ns = "http://xml.opendap.org/ns/DAP/4.0#"
-    dmr = f"""<?xml version="1.0" encoding="ISO-8859-1"?>
-<Dataset xmlns="{ns}" name="x.nc">
-    <Float32 name="lat">
-        <Attribute name="units" type="String"><Value>degrees</Value></Attribute>
-    </Float32>
-    <Attribute name="title" type="String"><Value>{FINAL}</Value></Attribute>
-</Dataset>"""
-    assert parse_title(dmr) == FINAL
-    assert parse_title(f'<Dataset xmlns="{ns}"/>') is None
+    assert classify(DAY, None, at(19), not_needed, not_needed)[0] == "missing"
+    assert classify(DAY, None, None, not_needed, not_needed)[0] == "no_cmr_granule"
 
 
 def test_parse_matches_granule_ur_not_window():

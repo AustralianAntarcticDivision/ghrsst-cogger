@@ -5,15 +5,16 @@ import logging
 import os
 from collections.abc import Callable
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from logging import Logger
 from pathlib import Path
 from typing import Any, TypeGuard
-from xml.etree import ElementTree
 
 import boto3
 import click
 import fsspec
+import h5netcdf
 import requests
 import xarray as xr
 from affine import Affine
@@ -37,12 +38,17 @@ FOLDER_PATH = "{date:%Y}/{date:%m}/{date:%d}"
 JPL_BASE = "https://archive.podaac.earthdata.nasa.gov/podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/"
 CMR_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 CMR_SHORT_NAME = "MUR-JPL-L4-GLOB-v4.1"
-# NetCDF metadata (no data) via OPeNDAP. Collection from the granules' CMR RelatedUrls
-OPENDAP_DMR_URL = (
-    "https://opendap.earthdata.nasa.gov/collections/C1996881146-POCLOUD/granules/"
-    "{granule}.dmr.xml"
-)
-# Shared HTTP session for CMR and OPeNDAP that retries transient server errors.
+# The cogger downloads the NetCDF at most one Lambda run (8 min) before it writes the
+# COG. A COG written less than this after the NetCDF was published may have been made
+# from the previous version, so it's too close to call and gets reprocessed
+CLOSE_CALL_HOURS = 1
+CLOSE_CALL = timedelta(hours=CLOSE_CALL_HOURS)
+# An NRT NetCDF this long after its date won't be replaced by a final: JPL never
+# finalised it, so re-COGing it changes nothing. Finals have arrived up to ~40 days
+# late (2020), so 60 days leaves a margin. A later final would still be caught: its
+# COG would then be older than the NetCDF, so preliminary
+NRT_ONLY_AFTER = timedelta(days=60)
+# Shared HTTP session for CMR that retries transient server errors.
 # raise_on_status=False hands the last response back so raise_for_status can report it
 HTTP = requests.Session()
 HTTP.mount(
@@ -503,25 +509,46 @@ def get_production_times(start: date, end: date) -> dict[date, datetime]:
     return parse_production_times(umm_json)
 
 
-def parse_title(dmr_xml: str) -> str | None:
-    """The NetCDF's global `title` attribute from an OPeNDAP DMR document."""
-    value = ElementTree.fromstring(dmr_xml).find(
-        ".//{*}Attribute[@name='title']/{*}Value"
-    )
-    return value.text.strip() if value is not None and value.text else None
-
-
 def get_source_title(day: date, headers: dict[str, str]) -> str | None:
-    """The current MUR NetCDF's title ("... Final product" or "... (nrt) product")."""
-    granule = FILE_STRING.format(date=day).removesuffix(".nc")
+    """The current MUR NetCDF's title ("... Final product" or "... (nrt) product").
+
+    Read from the archived file itself with HTTP range requests: only the HDF5 header
+    is fetched (about 1 MB), never the data.
+    """
     try:
-        response = HTTP.get(
-            OPENDAP_DMR_URL.format(granule=granule), headers=headers, timeout=120
+        with (
+            fsspec.open(
+                JPL_BASE + FILE_STRING.format(date=day),
+                headers=headers,
+                block_size=2**20,
+            ) as f,
+            h5netcdf.File(f, "r") as nc,
+        ):
+            title = nc.attrs.get("title")
+    # Any failure (HTTP, auth, a corrupt header) is reported as title_unknown and
+    # retried on resume, never guessed, so a broad catch is safe here
+    except Exception as e:
+        LOGGER.warning(f"Couldn't read the NetCDF title for {day}: {e}")
+        return None
+    if isinstance(title, bytes):
+        title = title.decode()
+    return str(title) if title else None
+
+
+def get_source_published(day: date) -> datetime | None:
+    """When PO.DAAC published the current MUR NetCDF: the archive's Last-Modified.
+
+    A HEAD request, so nothing is downloaded and no Earthdata login is needed.
+    """
+    try:
+        response = HTTP.head(
+            JPL_BASE + FILE_STRING.format(date=day), allow_redirects=True, timeout=60
         )
         response.raise_for_status()
-        return parse_title(response.text)
-    except (requests.RequestException, ElementTree.ParseError) as e:
-        LOGGER.warning(f"Couldn't read the NetCDF title for {day}: {e}")
+        return parsedate_to_datetime(response.headers["Last-Modified"])
+    # Reported as published_unknown and retried on resume, never guessed
+    except Exception as e:
+        LOGGER.warning(f"Couldn't read the NetCDF publication time for {day}: {e}")
         return None
 
 
@@ -544,25 +571,37 @@ def classify(
     day: date,
     cog_written: datetime | None,
     source_produced: datetime | None,
+    source_published: Callable[[], datetime | None],
     source_title: Callable[[], str | None],
+    today: date | None = None,
 ) -> tuple[str, str]:
     """Whether a date's COG was made from the preliminary (NRT) or final NetCDF.
 
-    `source_title` returns the current NetCDF's `title`. It's only called when the COG
-    was written from the current NetCDF, as fetching it is a network request.
+    `source_published` and `source_title` return the current NetCDF's publication time
+    (archive Last-Modified) and `title`. Each is a network request, so they're only
+    called when the rules before them haven't decided.
 
-    Returns (status, reason), each a fixed string per rule:
+    Returns (status, reason), each a fixed string per rule, checked in this order
+    (D = granule date, C = COG written, S = NetCDF produced, P = NetCDF published,
+    T = NetCDF title):
 
-    | status         | reason                        | when                             |
-    |----------------|-------------------------------|----------------------------------|
-    | no_cmr_granule | No COG and no CMR granule     | neither exists (e.g. today)      |
-    | missing        | No COG                        | CMR granule but no COG           |
-    | no_cmr_record  | No CMR record to compare with | COG but no CMR granule           |
-    | preliminary    | NetCDF regenerated after COG  | source produced > COG written    |
-    | final          | COG written from final NetCDF | COG >= source, "Final product"   |
-    | preliminary    | COG written from NRT NetCDF   | COG >= source, "near-real-time"  |
-    | title_unknown  | Couldn't read NetCDF title    | COG >= source, title unreadable  |
-    | title_unknown  | Unrecognised NetCDF title     | COG >= source, any other title   |
+    | status            | reason                                           | when                   |
+    |-------------------|--------------------------------------------------|------------------------|
+    | no_cmr_granule    | No COG and no CMR granule                        | no C, no S             |
+    | missing           | No COG                                           | no C                   |
+    | no_cmr_record     | No CMR record to compare with                    | no S                   |
+    | preliminary       | NetCDF regenerated after COG                     | S > C                  |
+    | published_unknown | Couldn't read NetCDF publication time            | P unreadable           |
+    | preliminary       | NetCDF published after COG                       | P > C                  |
+    | too_close         | COG written within 1 h of NetCDF publication     | C < P + CLOSE_CALL     |
+    | final             | COG written from final NetCDF                    | T has "Final product"  |
+    | source_nrt_only   | Archived NetCDF is still NRT; no final published | T NRT, D > 60 days ago |
+    | preliminary       | COG written from NRT NetCDF                      | T NRT, D recent        |
+    | title_unknown     | Couldn't read NetCDF title                       | T unreadable           |
+    | title_unknown     | Unrecognised NetCDF title                        | any other T            |
+
+    Once C >= P + CLOSE_CALL, the NetCDF was published before the cogger downloaded
+    it, so the COG was made from the current NetCDF and its title decides.
     """
     if cog_written is None:
         if source_produced is None:
@@ -572,6 +611,16 @@ def classify(
         return "no_cmr_record", "No CMR record to compare with"
     if source_produced > cog_written:
         return "preliminary", "NetCDF regenerated after COG"
+    published = source_published()
+    if published is None:
+        return "published_unknown", "Couldn't read NetCDF publication time"
+    if published > cog_written:
+        return "preliminary", "NetCDF published after COG"
+    if cog_written - published < CLOSE_CALL:
+        return (
+            "too_close",
+            f"COG written within {CLOSE_CALL_HOURS} h of NetCDF publication",
+        )
     # The COG was made from the current NetCDF, so it's final if that NetCDF is
     title = source_title()
     if title is None:
@@ -579,6 +628,8 @@ def classify(
     if "Final product" in title:
         return "final", "COG written from final NetCDF"
     if "near-real-time" in title:
+        if (today or datetime.now(UTC).date()) - day > NRT_ONLY_AFTER:
+            return "source_nrt_only", "Archived NetCDF is still NRT; no final published"
         return "preliminary", "COG written from NRT NetCDF"
     return "title_unknown", "Unrecognised NetCDF title"
 
@@ -602,13 +653,14 @@ def process_date(
             (status, reason). Never downloads or writes anything.
     """
     if audit:
-        headers = get_headers()
         produced = get_production_times(date.date(), date.date()).get(date.date())
         status, reason = classify(
             date.date(),
             get_cog_mtime(output_location, date),
             produced,
-            lambda: get_source_title(date.date(), headers),
+            lambda: get_source_published(date.date()),
+            # Earthdata login only if the title is needed
+            lambda: get_source_title(date.date(), get_headers()),
         )
         log.info(f"Audit {date:%Y-%m-%d}: {status} ({reason})")
         return status, reason
