@@ -217,43 +217,7 @@ Add `ghrsst/audit.py` with a click CLI. It changes nothing; it only reports.
 
 ## PR 6: Cogger confirms preliminary → final
 
-### `ghrsst/cogger.py`
-- `write_stac`: add `ghrsst:status` and `ghrsst:source_production_datetime`.
-- `process_date`: replace the "STAC exists → skip" check with:
-  1. Get the CMR production time for the date **before** downloading. If the file is
-     replaced mid-run, the date is just redone next time; a preliminary file is never
-     labelled final.
-  2. No STAC item → convert in full.
-  3. STAC says `final` and `--overwrite` isn't set → skip.
-  4. STAC has a `source_production_datetime` → re-convert with `overwrite=True` only if CMR's
-     production time is newer.
-  5. Existing STAC with no status → compare the COG's `LastModified` (`head_object`) with the
-     production time:
-     - COG older → re-convert with `overwrite=True`.
-     - Otherwise → **patch only the STAC JSON** with the two properties; don't touch the
-       COGs.
-  - Re-conversion must pass `overwrite=True` through to `write_data`, which skips existing
-    COGs per variable otherwise.
-
-### `ghrsst/dategen.py`
-- Queue the last 14 days instead of 7. This covers the ingest at day 1–2 and the confirm at
-  day 9–10, with slack for missed runs. A date that's already final exits after one S3 GET
-  and one CMR request.
-- Fix: wrap `N_PREVIOUS_DAYS` in `int(...)`. It comes from the environment as a string,
-  which breaks `range`.
-- SQS `send_messages` accepts at most 10 messages per call, so send in batches of 10.
-- Add a `--start/--end` CLI that queues an arbitrary date range, for the backfill.
-- Terraform sets `SQS_QUEUE` but the code reads `QUEUE_NAME`; it only works because the
-  defaults match. Change `terraform/main.tf` to set `QUEUE_NAME`.
-
-### Backfill
-- Deploy, then queue the full record (`2002-06-01 .. today`) with the new CLI. The Lambda
-  then patches already-final items and re-converts the ~625 preliminary ones.
-- SQS keeps messages for 1 day; ~8,500 messages finish well within that. Afterwards, check
-  the dead-letter queue and re-queue any failures.
-- Re-run the PR 5 audit: it should show 0 `preliminary` items older than 10 days.
-
-# TODO: Do we need to rewrite all STAC items with a status of final/preliminary? Do the already processed items have a status or just. a date? Could be good to add custom STAC properties of `date_created_preliminary`, `date_finalised`, and `status` or similar.
+See pr6-plan.md
 
 # TODO: Update source coop readme. e.g. rustac update.
 
