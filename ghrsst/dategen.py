@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import boto3
 
@@ -15,7 +15,8 @@ LOGGER = get_logger(__name__)
 
 def lambda_handler(event, _):
     log = LOGGER
-    today = datetime.today()
+    # UTC, matching MUR granule dates, whatever the local clock is
+    today = datetime.now(UTC).replace(tzinfo=None)
     log.info(f"Event: {event}")
     log.info(f"Working on date: {today:%Y-%m-%d}")
 

@@ -4,16 +4,21 @@
 
 The architecture for this process has the following components:
 
-* The code in this respository, including the [cog creation](ghrsst_cogger.py)
-  and [date seeding](ghrsst_dategen.py) for the SQS queue
-* A Docker image, with a [Dockerfile](Dockerfile)
+* The code in this repository, including the [COG creation](ghrsst/cogger.py),
+  [date seeding](ghrsst/dategen.py) for the SQS queue and the
+  [GeoParquet index](ghrsst/create_parquet.py)
+* A Docker image, with a [Dockerfile](Dockerfile), used by all three Lambdas
 * Terraform infrastructure as code, which includes:
   * An SQS queue to hold tasks
   * An SQS dead-letter queue to handle failed tasks
-  * A Lambda that runs the work that arrives on the queue
-  * A Lambda and CloudWatch scheduling that runs every day to seed tasks
-    for the last seven days, ensuring that data stays up to date. Note that
-    any work that's already been done is skipped.
+  * `ghrsst-lambda`: converts the date in each queue message to COGs and a STAC
+    item on source.coop
+  * `ghrsst-lambda-daily`: runs every day at 00:00 UTC (CloudWatch schedule) and
+    queues the last seven days, so the data stays up to date. Dates that already
+    have a STAC item are skipped.
+  * `ghrsst-lambda-parquet-daily`: runs every day at 01:00 UTC and rebuilds
+    `ghrsst-mur-v2.parquet`, a STAC GeoParquet index of every date from 2002-06-01
+  * A GitHub OIDC role that lets the release workflow push images to ECR
 
 ![Architecture](architecture.png).
 
@@ -35,6 +40,43 @@ make run-local  # convert one date from data/ to data/output
 The tests use a sample MUR NetCDF (~700 MB) in `data/`. Download it with `make download-test-data`,
 which needs an [Earthdata login](https://urs.earthdata.nasa.gov/users/new) (`earthaccess`
 prompts for it, or reads `~/.netrc` or `EARTHDATA_USERNAME`/`EARTHDATA_PASSWORD`).
+
+### Auditing preliminary vs final COGs
+
+`make audit` classifies every date's COG on source.coop as `preliminary`, `final` or
+another status (see `classify()` in `ghrsst/cogger.py`) and writes `data/audit.csv`.
+It's read-only: it never downloads a NetCDF or writes a COG.
+
+```bash
+export EARTHDATA_USERNAME=... EARTHDATA_PASSWORD=...  # to read the NetCDF titles
+caffeinate -is make audit 2>&1 | tee -a data/audit.log  # caffeinate keeps a Mac awake
+```
+
+It can take a few hours. Rows are saved as they go, so if it stops, run the same command
+again to resume.
+
+**Why an audit is needed.** MUR publishes each date's NetCDF twice, replacing it in
+place under the same name:
+
+- **NRT:** about 1–2 days after the date (`title`: "Daily MUR SST, Interim
+  near-real-time (nrt) product").
+- **Final:** later (`title`: "Daily MUR SST, Final product"). It's usually 9 days after
+  the date from 2020 onwards, and about 4 days in 2016. Occasionally it's much later
+  (up to ~40 days). Dates up to 2015 were all reprocessed in 2015.
+
+The COGs on source.coop were made in three ways:
+
+| When (UTC) | Dates | Source NetCDF used |
+|---|---|---|
+| Bulk run, 2025-03-20 07:14–15:02 | 2002-06-01 → 2024-12-31 | Final (long since published), apart from ~50 dates whose archived NetCDF is still NRT |
+| Bulk run, 2025-02-11 02:31 | 2025-01-01 → 2025-02-09 | Final up to ~2025-02-01, NRT after: the finals for later dates didn't exist yet |
+| Daily Lambda, from 2025-02-11 23:56 | 2025-02-10 onwards | NRT: each date was COGed 1–4 days after it (mostly 2) |
+
+The daily job skips any date that already has a STAC item, so it never revisited a date
+once its final NetCDF was published. Every daily-ingested COG is therefore preliminary
+until it's reprocessed. The audit measures exactly which dates are affected, and the
+finalise process reprocesses `preliminary` and `too_close` dates. One date: `python ghrsst/cogger.py --date YYYY-MM-DD --output-location
+s3://us-west-2.opendata.source.coop/ausantarctic/ghrsst-mur-v2/ --audit`.
 
 Add a dependency with `uv add <package>` (or `uv add --dev <package>`), which updates
 `pyproject.toml` and `uv.lock`. Commit both.

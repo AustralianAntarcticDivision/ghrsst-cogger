@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from logging import Logger
 
 import click
@@ -95,7 +95,8 @@ async def create_parquet(
 
 def lambda_handler(event, _):
     log = LOGGER
-    end_date = datetime.today()
+    # Naive UTC, to match the naive start date
+    end_date = datetime.now(UTC).replace(tzinfo=None)
     log.info(f"Event: {event}")
     log.info(f"Working on date: {end_date:%Y-%m-%d}")
 
