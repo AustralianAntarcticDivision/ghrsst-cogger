@@ -1,7 +1,7 @@
 """Classify every COG as preliminary or final, without writing anything.
 
 Same rules as `process_date(audit=True)`, with bulk lookups where possible: one S3
-listing for the COG write times, and one CMR query per month for the NetCDF
+listing for the COG write times (the oldest of each date's COGs), and one CMR query per month for the NetCDF
 production times. The NetCDF title is read per date from the archived file itself
 (header only, via HTTP range requests), and only where needed.
 
@@ -22,19 +22,20 @@ import click
 from s3path import S3Path
 
 from ghrsst.cogger import (
+    VARIABLES,
     GHRSSTException,
     _public_s3,
     classify,
     get_headers,
     get_logger,
     get_production_times,
+    get_source_attrs,
     get_source_published,
-    get_source_title,
+    oldest_write,
 )
 
 LOGGER = get_logger(__name__)
 PROD_LOCATION = "s3://us-west-2.opendata.source.coop/ausantarctic/ghrsst-mur-v2/"
-COG_SUFFIX = "_analysed_sst.tif"
 FIELDS = [
     "date",
     "cog_written",
@@ -50,9 +51,13 @@ FIELDS = [
 RETRY_STATUSES = {"title_unknown", "published_unknown", "no_cmr_record"}
 
 
-def list_cog_times(location: S3Path) -> dict[date, datetime]:
-    """LastModified of each date's analysed_sst COG, from one S3 listing."""
-    cogs: dict[date, datetime] = {}
+def list_cog_times(location: S3Path) -> dict[date, datetime | None]:
+    """When each date's COGs were written, from one S3 listing.
+
+    The oldest of a date's COGs (None if it has no analysed_sst), as in
+    get_cogs_written.
+    """
+    per_var: dict[date, dict[str, datetime]] = {}
     prefix = location.key.rstrip("/") + "/"
     pages = (
         _public_s3()
@@ -62,10 +67,11 @@ def list_cog_times(location: S3Path) -> dict[date, datetime]:
     for page in pages:
         for obj in page.get("Contents", []):
             name = obj["Key"].rsplit("/", 1)[-1]
-            if name.endswith(COG_SUFFIX):
-                day = datetime.strptime(name[:8], "%Y%m%d").date()
-                cogs[day] = obj["LastModified"]
-    return cogs
+            for var in VARIABLES:
+                if name.endswith(f"_{var}.tif"):
+                    day = datetime.strptime(name[:8], "%Y%m%d").date()
+                    per_var.setdefault(day, {})[var] = obj["LastModified"]
+    return {day: oldest_write(dict(times)) for day, times in per_var.items()}
 
 
 def production_times(start: date, end: date) -> dict[date, datetime]:
@@ -92,13 +98,10 @@ def read_rows(csv_path: Path) -> dict[str, dict[str, str]]:
 
 
 def write_rows(csv_path: Path, rows: dict[str, dict[str, str]]) -> None:
-    """Rewrite the CSV sorted, one row per date, in the current FIELDS format.
-
-    Columns no longer in FIELDS (e.g. from an older run) are dropped.
-    """
+    """Rewrite the CSV sorted, one row per date."""
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()
         writer.writerows(rows[key] for key in sorted(rows))
 
@@ -156,8 +159,6 @@ def main(start, end, output_location, csv_path):
             f"Resuming from {csv_path}: {len(days) - len(todo)} dates done, "
             f"{len(todo)} to do"
         )
-        # Normalise first, so appended rows match the header even if the format changed
-        write_rows(csv_path, rows)
 
     if todo:
         LOGGER.info(f"Listing COGs in {output_location}")
@@ -178,7 +179,7 @@ def main(start, end, output_location, csv_path):
                 return published[-1]
 
             def source_title() -> str | None:
-                titles.append(get_source_title(day, headers))
+                titles.append((get_source_attrs(day, headers) or {}).get("title"))
                 return titles[-1]
 
             status, reason = classify(
@@ -229,7 +230,7 @@ def main(start, end, output_location, csv_path):
             "title_unknown",
             "published_unknown",
             "too_close",
-            "source_nrt_only",
+            "nrt_only",
         ):
             click.echo(f"  {row['status']} {row['date']}: {row['reason']}")
 

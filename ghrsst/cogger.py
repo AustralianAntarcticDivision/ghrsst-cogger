@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 
+import functools
+import hashlib
 import json
 import logging
 import os
-from collections.abc import Callable
+import shutil
+import threading
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from importlib import metadata
 from logging import Logger
 from pathlib import Path
 from typing import Any, TypeGuard
@@ -19,10 +24,10 @@ import requests
 import xarray as xr
 from affine import Affine
 from aiohttp.client_exceptions import ClientResponseError
+from boto3.session import Session
 from botocore import UNSIGNED
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from earthaccess import get_edl_token, login
 from odc.geo.geobox import GeoBox
 from odc.geo.xr import assign_crs, xr_coords
 from pystac import Asset, Item, Link, MediaType, RelType
@@ -35,19 +40,48 @@ from xarray import Dataset
 COLLECTION = "ghrsst-mur-v2"
 FILE_STRING = "{date:%Y%m%d}090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc"
 FOLDER_PATH = "{date:%Y}/{date:%m}/{date:%d}"
+# Where cache_local downloads NetCDFs. Lambda's only writable disk, and it persists
+# between invocations on a warm container
+CACHE_DIR = Path("/tmp")
 JPL_BASE = "https://archive.podaac.earthdata.nasa.gov/podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/"
 CMR_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 CMR_SHORT_NAME = "MUR-JPL-L4-GLOB-v4.1"
-# The cogger downloads the NetCDF at most one Lambda run (8 min) before it writes the
+# The cogger downloads the NetCDF at most one Lambda run (15 min) before it writes the
 # COG. A COG written less than this after the NetCDF was published may have been made
 # from the previous version, so it's too close to call and gets reprocessed
 CLOSE_CALL_HOURS = 1
 CLOSE_CALL = timedelta(hours=CLOSE_CALL_HOURS)
 # An NRT NetCDF this long after its date won't be replaced by a final: JPL never
 # finalised it, so re-COGing it changes nothing. Finals have arrived up to ~40 days
-# late (2020), so 60 days leaves a margin. A later final would still be caught: its
+# late (2020), so 50 days leaves a margin. A later final would still be caught: its
 # COG would then be older than the NetCDF, so preliminary
-NRT_ONLY_AFTER = timedelta(days=60)
+NRT_ONLY_AFTER = timedelta(days=50)
+
+# Fixed reasons returned by classify, also used to decide what the Lambda does
+REASON_NO_DATA = "No COG and no CMR granule"
+REASON_NO_COG = "No COG"
+REASON_NO_CMR = "No CMR record to compare with"
+REASON_REGENERATED = "NetCDF regenerated after COG"
+REASON_PUBLISHED_UNKNOWN = "Couldn't read NetCDF publication time"
+REASON_PUBLISHED_AFTER = "NetCDF published after COG"
+REASON_TOO_CLOSE = f"COG written within {CLOSE_CALL_HOURS} h of NetCDF publication"
+REASON_FINAL_SOURCE = "COG written from final NetCDF"
+REASON_NRT_ONLY = "Archived NetCDF is still NRT; no final published"
+REASON_NRT_SOURCE = "COG written from NRT NetCDF"
+REASON_TITLE_UNREADABLE = "Couldn't read NetCDF title"
+REASON_TITLE_UNKNOWN = "Unrecognised NetCDF title"
+
+# STAC: a filterable status label, plus provenance in the Processing extension
+STATUS_PROPERTY = "ghrsst:status"
+PROCESSING_EXTENSION = "https://stac-extensions.github.io/processing/v1.3.0/schema.json"
+# file:checksum and file:size on each COG asset, so anyone holding byte-range
+# references (kerchunk, virtual Zarr, Icechunk) can tell when a COG was replaced
+FILE_EXTENSION = "https://stac-extensions.github.io/file/v2.1.0/schema.json"
+# NetCDF global attributes recorded as provenance
+SOURCE_ATTRS = ("title", "product_version", "processing_level")
+# Connect timeout first: requests tries each of a host's addresses in turn, so a short
+# connect timeout falls back from a dead IPv6 route to IPv4 in seconds, not ~75 s
+CONNECT_TIMEOUT = 5
 # Shared HTTP session for CMR that retries transient server errors.
 # raise_on_status=False hands the last response back so raise_for_status can report it
 HTTP = requests.Session()
@@ -114,10 +148,21 @@ def _exists(path: Path | S3Path) -> bool:
         return path.exists()
 
 
+_PUBLIC_S3_LOCK = threading.Lock()
+
+
 def _public_s3():
     # ponytail: unsigned and us-west-2 only, fine for the public source.coop bucket.
     # Pass a signed client in if a private bucket ever needs auditing.
-    return boto3.client(
+    # One client, shared by the lookup threads: clients are thread-safe, but creating
+    # them isn't, so the first call is locked and uses its own session
+    with _PUBLIC_S3_LOCK:
+        return _make_public_s3()
+
+
+@functools.cache
+def _make_public_s3():
+    return Session().client(
         "s3", region_name="us-west-2", config=Config(signature_version=UNSIGNED)
     )
 
@@ -168,6 +213,32 @@ def get_input_path(input_location: str, date: datetime) -> str:
         return str(Path(input_location) / FILE_STRING.format(date=date))
 
 
+EDL_TOKEN_URL = "https://urs.earthdata.nasa.gov/api/users/find_or_create_token"
+
+
+@functools.cache
+def _earthdata_token() -> str:
+    """An Earthdata Login bearer token for EARTHDATA_USERNAME / EARTHDATA_PASSWORD.
+
+    Reuses the user's existing token if there is one. This is the same request
+    earthaccess.login makes, without also setting up earthaccess's data store, which
+    isn't needed here. Cached per process (only the token, not the credentials), so a
+    warm Lambda logs in once; tokens are valid for 60 days. A failed login raises, and
+    isn't cached.
+    """
+    try:
+        response = HTTP.post(
+            EDL_TOKEN_URL,
+            auth=(os.environ["EARTHDATA_USERNAME"], os.environ["EARTHDATA_PASSWORD"]),
+            headers={"Accept": "application/json"},
+            timeout=(CONNECT_TIMEOUT, 60),
+        )
+        response.raise_for_status()
+        return response.json()["access_token"]
+    except (requests.RequestException, KeyError, ValueError) as e:
+        raise GHRSSTException(f"Earthdata login failed: {e}") from e
+
+
 def get_headers() -> dict[str, str]:
     """Get the earthdata authorisation headers for the request"""
     earthdata_token = os.environ.get("EARTHDATA_TOKEN", None)
@@ -184,12 +255,7 @@ def get_headers() -> dict[str, str]:
 
     # If we don't have a token, use the username and password to get one
     if earthdata_token is None:
-        auth = login(strategy="environment")
-        if auth.authenticated:
-            # earthaccess annotates get_edl_token() as str, but it returns a dict
-            earthdata_token = get_edl_token()["access_token"]  # ty: ignore[invalid-argument-type]
-        else:
-            raise GHRSSTException("Failed to authenticate with Earthdata")
+        earthdata_token = _earthdata_token()
 
     # Return the headers
     return {"Authorization": f"Bearer {earthdata_token}"}
@@ -217,6 +283,19 @@ def get_simple_raster_info(data: Dataset, var: str):
     return [meta]
 
 
+def download_netcdf(url: str, path: Path) -> None:
+    """Download a NetCDF from PO.DAAC with the Earthdata login, streaming to disk.
+
+    Written to a .part file and renamed when complete, so an interrupted download
+    never leaves a truncated file at the final path.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".part")
+    with fsspec.open(url, headers=get_headers()) as src, partial.open("wb") as dst:
+        shutil.copyfileobj(src, dst, length=2**24)
+    partial.replace(path)
+
+
 def load_data(
     date: datetime, input_location: str, cache_local: bool = False, log: Logger = LOGGER
 ) -> Dataset:
@@ -241,10 +320,8 @@ def load_data(
 
     if cache_local:
         log.info(f"Caching {input_path} locally")
-        cache_path = Path("/tmp") / FILE_STRING.format(date=date)
-        with fsspec.open(input_path, headers=get_headers()) as f:
-            with cache_path.open("wb") as cache_f:
-                cache_f.write(f.read())
+        cache_path = CACHE_DIR / FILE_STRING.format(date=date)
+        download_netcdf(input_path, cache_path)
         data = xr.open_dataset(
             cache_path, chunks={}, mask_and_scale=False, drop_variables=DROP_VARIABLES
         )
@@ -260,7 +337,7 @@ def load_data(
                 ).load()
         except ClientResponseError as e:
             raise GHRSSTException(
-                f"Failed to open {input_path} with error {e}. Please check your EARTHDATA_TOKEN."
+                f"Failed to open {input_path} with error {e}. Please check your Earthdata credentials."
             ) from e
         # Don't catch this here. Catch it elsewhere and handle differently.
         # except FileNotFoundError as e:
@@ -310,21 +387,26 @@ def write_data(
     output_location: Path | S3Path,
     overwrite: bool = False,
     log: Logger = LOGGER,
-) -> list[tuple[str, Path | S3Path]]:
+) -> list[tuple[str, Path | S3Path, dict[str, Any]]]:
+    """Write a COG per variable. Returns (variable, path, File extension fields).
+
+    The File extension fields (checksum and size) are only known for COGs written
+    now, so they're empty for existing COGs that were skipped.
+    """
     if not _is_s3_path(output_location):
         if not output_location.exists():
             output_location.mkdir(parents=True)
 
     data = data.chunk({"time": 1, "lat": 500, "lon": 500})
 
-    written_files: list[tuple[str, Path | S3Path]] = []
+    written_files: list[tuple[str, Path | S3Path, dict[str, Any]]] = []
     # xarray types variable names as Hashable; ours are always str
     for var in map(str, data.data_vars):
         cog_file = get_output_path(output_location, date, f"_{var}.tif")
 
         if _exists(cog_file) and not overwrite:
             log.info(f"Skipping {var} as it already exists")
-            written_files.append((var, cog_file))
+            written_files.append((var, cog_file, {}))
             continue
 
         data_var = data[var]
@@ -355,29 +437,145 @@ def write_data(
         from odc.geo.cog._rio import _get_gdal_metadata, _write_cog
 
         # The private API is annotated as taking an ndarray but accepts a DataArray
-        cog_file.write_bytes(
-            _write_cog(
-                data_var,  # ty: ignore[invalid-argument-type]
-                data.odc.geobox,
-                ":mem:",
-                nodata=data_var.attrs.get("nodata"),
-                gdal_metadata=_get_gdal_metadata(data_var, {}),
-                **COG_OPTS,
-            )
+        cog_bytes = _write_cog(
+            data_var,  # ty: ignore[invalid-argument-type]
+            data.odc.geobox,
+            ":mem:",
+            nodata=data_var.attrs.get("nodata"),
+            gdal_metadata=_get_gdal_metadata(data_var, {}),
+            **COG_OPTS,
         )
+        # Writing to ":mem:" returns the COG's bytes (it returns a Path for files)
+        if not isinstance(cog_bytes, bytes):
+            raise GHRSSTException(f"Expected COG bytes for {var}, got {cog_bytes!r}")
+        cog_file.write_bytes(cog_bytes)
 
         log.info(f"Finished writing {var}")
 
-        written_files.append((var, cog_file))
+        written_files.append((var, cog_file, file_fields(cog_bytes)))
 
     return written_files
 
 
+def file_fields(content: bytes) -> dict[str, Any]:
+    """File extension fields for a written file: SHA2-256 multihash and size."""
+    # Multihash: 0x12 = sha2-256, 0x20 = 32-byte digest
+    return {
+        "file:checksum": "1220" + hashlib.sha256(content).hexdigest(),
+        "file:size": len(content),
+    }
+
+
+def _rfc3339(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def software_versions() -> dict[str, str]:
+    """Versions of the software that converts NetCDF to COG, for processing:software."""
+    import rasterio
+
+    versions = {"GDAL": rasterio.__gdal_version__}
+    for package in ("ghrsst-cogger", "rasterio", "odc-geo", "xarray", "h5netcdf"):
+        try:
+            versions[package] = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            versions[package] = "unknown"
+    return versions
+
+
+def source_provenance(
+    produced: datetime | None,
+    published: datetime | None,
+    attrs: dict[str, str] | None,
+    converting: bool,
+) -> dict[str, Any]:
+    """STAC properties describing the NetCDF a COG was made from.
+
+    Uses the Processing extension where it has a field, and ghrsst:source_published
+    (when PO.DAAC published the NetCDF) where it doesn't. processing:software is only
+    set when converting: a status-only update can't know what made the existing COG.
+    """
+    props: dict[str, Any] = {"processing:facility": "NASA JPL"}
+    if produced:
+        props["processing:datetime"] = _rfc3339(produced)
+    if published:
+        props["ghrsst:source_published"] = _rfc3339(published)
+    attrs = attrs or {}
+    for attr, field in (
+        ("title", "processing:lineage"),
+        ("product_version", "processing:version"),
+        ("processing_level", "processing:level"),
+    ):
+        if attr in attrs:
+            props[field] = attrs[attr]
+    if converting:
+        props["processing:software"] = software_versions()
+    return props
+
+
+def apply_status(doc: dict, status: str, provenance: dict[str, Any]) -> dict:
+    """Set a STAC item dict's status and provenance, in place, and return it.
+
+    Also adds the Processing extension and changes the source NetCDF link from
+    canonical (the authoritative copy of this item) to derived_from (its source).
+    """
+    doc.setdefault("properties", {})[STATUS_PROPERTY] = status
+    doc["properties"].update(provenance)
+    extensions = doc.setdefault("stac_extensions", [])
+    if PROCESSING_EXTENSION not in extensions:
+        extensions.append(PROCESSING_EXTENSION)
+    for link in doc.get("links", []):
+        if link.get("rel") == "canonical" and link.get("title") == "Original NetCDF":
+            link["rel"] = "derived_from"
+    return doc
+
+
+def _read_json(path: Path | S3Path) -> dict | None:
+    """A JSON document from S3 or disk, or None if it doesn't exist."""
+    if _is_s3_path(path):
+        try:
+            body = boto3.client("s3").get_object(Bucket=path.bucket, Key=path.key)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                return None
+            raise
+        return json.loads(body["Body"].read())
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def _write_json(path: Path | S3Path, doc: dict) -> None:
+    """Write a JSON document to S3 (source.coop) or disk."""
+    body = json.dumps(doc, indent=2)
+    if _is_s3_path(path):
+        boto3.client("s3").put_object(
+            Bucket=path.bucket,
+            Key=path.key,
+            Body=body,
+            ACL="bucket-owner-full-control",
+            ContentType="application/json",
+        )
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+
+
+def set_stac_status(
+    stac_file: Path | S3Path, status: str, provenance: dict[str, Any]
+) -> None:
+    """Update an existing STAC item's status and provenance, leaving its COGs alone."""
+    doc = _read_json(stac_file)
+    if doc is None:
+        raise GHRSSTException(f"No STAC item at {stac_file} to update")
+    _write_json(stac_file, apply_status(doc, status, provenance))
+
+
 def write_stac(
     data: Dataset,
-    written_files: list[tuple[str, Path | S3Path]],
+    written_files: list[tuple[str, Path | S3Path, dict[str, Any]]],
     date: datetime,
     output_location: Path | S3Path,
+    status: str,
+    provenance: dict[str, Any],
     log: Logger = LOGGER,
 ) -> Item:
     stac_file = get_output_path(output_location, date, ".stac-item.json")
@@ -404,35 +602,36 @@ def write_stac(
                 title=var,
                 media_type=MediaType.COG,
                 roles=["data"],
-                extra_fields={"raster:bands": get_simple_raster_info(data, var)},
+                extra_fields={
+                    "raster:bands": get_simple_raster_info(data, var),
+                    **fields,
+                },
             )
-            for var, file in written_files
+            for var, file, fields in written_files
         },
     )
 
     item.add_link(
         Link(
-            rel=RelType.CANONICAL,
+            rel=RelType.DERIVED_FROM,
             target=get_input_path("JPL", date),
             media_type=MediaType.NETCDF,
             title="Original NetCDF",
         )
     )
+    item.properties[STATUS_PROPERTY] = status
+    item.properties.update(provenance)
+    # When these COGs were (re)made, so replacements are easy to find
+    item.properties["updated"] = _rfc3339(datetime.now(UTC))
+    item.stac_extensions.append(PROCESSING_EXTENSION)
+    if any(fields for _, _, fields in written_files):
+        item.stac_extensions.append(FILE_EXTENSION)
 
-    if _is_s3_path(output_location):
-        # Assume we're writing to source.coop
-        item.set_self_href(_get_href(stac_file))
-        s3 = boto3.client("s3")
-        s3.put_object(
-            Bucket=stac_file.bucket,
-            Key=stac_file.key,
-            Body=json.dumps(item.to_dict(), indent=2),
-            ACL="bucket-owner-full-control",
-            ContentType="application/json",
-        )
-    else:
-        item.set_self_href(str(stac_file))
-        item.save_object()
+    # Assume S3 is source.coop
+    item.set_self_href(
+        _get_href(stac_file) if _is_s3_path(stac_file) else str(stac_file)
+    )
+    _write_json(stac_file, item.to_dict())
 
     return item
 
@@ -484,7 +683,7 @@ def get_production_times(start: date, end: date) -> dict[date, datetime]:
                 "temporal": f"{start:%Y-%m-%d}T00:00:00Z,{end:%Y-%m-%d}T23:59:59Z",
                 "page_size": 2000,
             },
-            timeout=120,
+            timeout=(CONNECT_TIMEOUT, 120),
         )
         response.raise_for_status()
     except (requests.Timeout, requests.ConnectionError) as e:
@@ -509,30 +708,62 @@ def get_production_times(start: date, end: date) -> dict[date, datetime]:
     return parse_production_times(umm_json)
 
 
-def get_source_title(day: date, headers: dict[str, str]) -> str | None:
-    """The current MUR NetCDF's title ("... Final product" or "... (nrt) product").
+def _attrs_as_str(attrs) -> dict[str, str]:
+    """The SOURCE_ATTRS present in a NetCDF's global attributes, as strings."""
+    found = {}
+    for name in SOURCE_ATTRS:
+        value = attrs.get(name)
+        if isinstance(value, bytes):
+            value = value.decode()
+        if value is not None and str(value):
+            found[name] = str(value)
+    return found
+
+
+def get_source_attrs(day: date, headers: dict[str, str]) -> dict[str, str] | None:
+    """The current MUR NetCDF's title, product version and processing level.
 
     Read from the archived file itself with HTTP range requests: only the HDF5 header
-    is fetched (about 1 MB), never the data.
+    is fetched (about 1 MB), never the data. The title says whether it's the final
+    ("... Final product") or NRT ("... (nrt) product") version.
     """
     try:
         with (
             fsspec.open(
                 JPL_BASE + FILE_STRING.format(date=day),
                 headers=headers,
+                # Read ahead in 1 MB blocks: the HDF5 header is many small reads, and
+                # this fetches it in a few requests (~2-4 s) instead of many (~100 s)
                 block_size=2**20,
+                cache_type="readahead",
             ) as f,
             h5netcdf.File(f, "r") as nc,
         ):
-            title = nc.attrs.get("title")
+            return _attrs_as_str(nc.attrs)
     # Any failure (HTTP, auth, a corrupt header) is reported as title_unknown and
-    # retried on resume, never guessed, so a broad catch is safe here
+    # retried, never guessed, so a broad catch is safe here
     except Exception as e:
-        LOGGER.warning(f"Couldn't read the NetCDF title for {day}: {e}")
+        LOGGER.warning(f"Couldn't read the NetCDF attributes for {day}: {e}")
         return None
-    if isinstance(title, bytes):
-        title = title.decode()
-    return str(title) if title else None
+
+
+def status_from_title(
+    day: date, title: str | None, today: date | None = None
+) -> str | None:
+    """The STAC status of data made from a NetCDF with this title, or None if unknown.
+
+    final for the final product. For NRT, nrt_only once the date is more than
+    NRT_ONLY_AFTER old (no final was ever published), otherwise preliminary.
+    """
+    if not title:
+        return None
+    if "Final product" in title:
+        return "final"
+    if "near-real-time" in title:
+        if (today or datetime.now(UTC).date()) - day > NRT_ONLY_AFTER:
+            return "nrt_only"
+        return "preliminary"
+    return None
 
 
 def get_source_published(day: date) -> datetime | None:
@@ -542,7 +773,9 @@ def get_source_published(day: date) -> datetime | None:
     """
     try:
         response = HTTP.head(
-            JPL_BASE + FILE_STRING.format(date=day), allow_redirects=True, timeout=60
+            JPL_BASE + FILE_STRING.format(date=day),
+            allow_redirects=True,
+            timeout=(CONNECT_TIMEOUT, 60),
         )
         response.raise_for_status()
         return parsedate_to_datetime(response.headers["Last-Modified"])
@@ -552,19 +785,59 @@ def get_source_published(day: date) -> datetime | None:
         return None
 
 
-def get_cog_mtime(output_location: Path | S3Path, date: datetime) -> datetime | None:
-    """When the date's analysed_sst COG was written (all its COGs are written together)."""
-    cog = get_output_path(output_location, date, "_analysed_sst.tif")
-    if _is_s3_path(cog):
+def oldest_write(times: Mapping[str, datetime | None]) -> datetime | None:
+    """The oldest write time of a date's COGs (by variable), or None if it has none.
+
+    The oldest, not any one of them: if a re-COG stopped partway, some COGs are new
+    and the rest still come from the older NetCDF, and the date must not look final.
+
+    Only COGs that exist count: older NetCDFs have no sst_anomaly, so those dates
+    only ever have 4 COGs. A date counts as missing (None) if it has no analysed_sst.
+    """
+    if times.get("analysed_sst") is None:
+        return None
+    return min(t for t in times.values() if t is not None)
+
+
+def _write_time(path: Path | S3Path) -> datetime | None:
+    if _is_s3_path(path):
         try:
-            return _public_s3().head_object(Bucket=cog.bucket, Key=cog.key)[
+            return _public_s3().head_object(Bucket=path.bucket, Key=path.key)[
                 "LastModified"
             ]
         except ClientError:
             return None
-    if not cog.exists():
+    if not path.exists():
         return None
-    return datetime.fromtimestamp(cog.stat().st_mtime, tz=UTC)
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+
+
+def get_cog_write_times(
+    output_location: Path | S3Path, date: datetime
+) -> dict[str, datetime | None]:
+    """Each of the date's COGs' write time, by variable (None if it doesn't exist)."""
+    return {
+        var: _write_time(get_output_path(output_location, date, f"_{var}.tif"))
+        for var in VARIABLES
+    }
+
+
+def get_cogs_written(output_location: Path | S3Path, date: datetime) -> datetime | None:
+    """When the date's COGs were written: the oldest of them (see oldest_write)."""
+    return oldest_write(get_cog_write_times(output_location, date))
+
+
+def stac_is_stale(
+    cog_times: Mapping[str, datetime | None], stac_written: datetime | None
+) -> bool:
+    """Whether any COG was written after the STAC item, so the item doesn't describe it.
+
+    The STAC item is always written after its COGs, so this only happens when a run
+    stopped between the two (or another run wrote the COGs meanwhile). Patching the
+    status onto that item would leave the new COGs without their checksums.
+    """
+    written = [t for t in cog_times.values() if t is not None]
+    return stac_written is not None and bool(written) and max(written) > stac_written
 
 
 def classify(
@@ -595,7 +868,7 @@ def classify(
     | preliminary       | NetCDF published after COG                       | P > C                  |
     | too_close         | COG written within 1 h of NetCDF publication     | C < P + CLOSE_CALL     |
     | final             | COG written from final NetCDF                    | T has "Final product"  |
-    | source_nrt_only   | Archived NetCDF is still NRT; no final published | T NRT, D > 60 days ago |
+    | nrt_only          | Archived NetCDF is still NRT; no final published | T NRT, D > 50 days ago |
     | preliminary       | COG written from NRT NetCDF                      | T NRT, D recent        |
     | title_unknown     | Couldn't read NetCDF title                       | T unreadable           |
     | title_unknown     | Unrecognised NetCDF title                        | any other T            |
@@ -605,33 +878,121 @@ def classify(
     """
     if cog_written is None:
         if source_produced is None:
-            return "no_cmr_granule", "No COG and no CMR granule"
-        return "missing", "No COG"
+            return "no_cmr_granule", REASON_NO_DATA
+        return "missing", REASON_NO_COG
     if source_produced is None:
-        return "no_cmr_record", "No CMR record to compare with"
+        return "no_cmr_record", REASON_NO_CMR
     if source_produced > cog_written:
-        return "preliminary", "NetCDF regenerated after COG"
+        return "preliminary", REASON_REGENERATED
     published = source_published()
     if published is None:
-        return "published_unknown", "Couldn't read NetCDF publication time"
+        return "published_unknown", REASON_PUBLISHED_UNKNOWN
     if published > cog_written:
-        return "preliminary", "NetCDF published after COG"
+        return "preliminary", REASON_PUBLISHED_AFTER
     if cog_written - published < CLOSE_CALL:
-        return (
-            "too_close",
-            f"COG written within {CLOSE_CALL_HOURS} h of NetCDF publication",
-        )
-    # The COG was made from the current NetCDF, so it's final if that NetCDF is
+        return "too_close", REASON_TOO_CLOSE
+    # The COG was made from the current NetCDF, so it has that NetCDF's status
     title = source_title()
     if title is None:
-        return "title_unknown", "Couldn't read NetCDF title"
-    if "Final product" in title:
-        return "final", "COG written from final NetCDF"
-    if "near-real-time" in title:
-        if (today or datetime.now(UTC).date()) - day > NRT_ONLY_AFTER:
-            return "source_nrt_only", "Archived NetCDF is still NRT; no final published"
-        return "preliminary", "COG written from NRT NetCDF"
-    return "title_unknown", "Unrecognised NetCDF title"
+        return "title_unknown", REASON_TITLE_UNREADABLE
+    status = status_from_title(day, title, today)
+    if status == "final":
+        return "final", REASON_FINAL_SOURCE
+    if status == "nrt_only":
+        return "nrt_only", REASON_NRT_ONLY
+    if status == "preliminary":
+        return "preliminary", REASON_NRT_SOURCE
+    return "title_unknown", REASON_TITLE_UNKNOWN
+
+
+def action_for(status: str, reason: str) -> str:
+    """What the Lambda does with a date's audit result.
+
+    - set_status: the COG already matches the current NetCDF, so only the STAC item's
+      status is updated. Re-COGing would produce the same data.
+    - reprocess: the COG was made from an older NetCDF (or is missing), so re-COG.
+    - retry: the status can't be determined yet, so fail and let SQS retry.
+    - skip: nothing has been published for this date yet.
+    """
+    if status in ("final", "nrt_only"):
+        return "set_status"
+    if status == "preliminary":
+        return "set_status" if reason == REASON_NRT_SOURCE else "reprocess"
+    if status in ("too_close", "missing"):
+        return "reprocess"
+    if status == "no_cmr_granule":
+        return "skip"
+    return "retry"
+
+
+def clear_cache(cache_dir: Path = CACHE_DIR) -> None:
+    """Delete any cached MUR NetCDFs, including partial downloads.
+
+    All of them, not just this date's: a Lambda container runs one conversion at a
+    time, so anything else in the cache is left over from a failed run.
+    """
+    for path in cache_dir.glob(FILE_STRING.replace("{date:%Y%m%d}", "*") + "*"):
+        path.unlink(missing_ok=True)
+
+
+def convert_date(
+    date: datetime,
+    input_location: str,
+    output_location: Path | S3Path,
+    overwrite: bool,
+    cache_local: bool,
+    log: Logger = LOGGER,
+) -> Item:
+    """Convert a date's NetCDF to COGs and a STAC item recording its status.
+
+    The status comes from the downloaded NetCDF's own title, so it's exact.
+    """
+    day = date.date()
+    produced = published = None
+    if input_location.upper() == "JPL":
+        # Provenance of the archived file. Published is read before the download
+        try:
+            produced = get_production_times(day, day).get(day)
+        except GHRSSTException as e:
+            log.warning(f"No CMR production time for {day}: {e}")
+        published = get_source_published(day)
+
+    if cache_local:
+        # Leftovers from runs that failed or timed out on this container, which would
+        # otherwise fill /tmp after a few failures
+        clear_cache()
+    try:
+        input_path = get_input_path(input_location, date)
+        log.info(f"Loading data from {input_path}")
+        data = load_data(date, input_location, cache_local=cache_local, log=log)
+        attrs = _attrs_as_str(data.attrs)
+        status = status_from_title(day, attrs.get("title"))
+        if status is None:
+            raise GHRSSTException(
+                f"Unrecognised NetCDF title for {day}: {attrs.get('title')!r}"
+            )
+        log.info(f"Source NetCDF is {status} ({attrs.get('title')})")
+
+        log.info("Processing data...")
+        processed = process_data(data)
+
+        if _is_s3_path(output_location):
+            log.info(f"Writing data to s3:/{output_location}")
+        else:
+            log.info(f"Writing data to {output_location}")
+        written_files = write_data(processed, date, output_location, overwrite, log=log)
+
+        log.info("Writing STAC")
+        provenance = source_provenance(produced, published, attrs, converting=True)
+        stac_doc = write_stac(
+            data, written_files, date, output_location, status, provenance, log=log
+        )
+    finally:
+        if cache_local:
+            clear_cache()
+
+    log.info(f"Finished writing to: {stac_doc.self_href}")
+    return stac_doc
 
 
 def process_date(
@@ -645,22 +1006,42 @@ def process_date(
 ) -> tuple[str, str] | None:
     """Process a date from a data source and output to a location
 
+    Converts dates with no STAC item. For dates that have one, records or finalises
+    their status: if the STAC item already says final it stops there. Otherwise it
+    classifies the existing COG (the audit's rules) and either just updates the
+    STAC item's status, or re-COGs if the COG was made from an older NetCDF (or is
+    newer than the STAC item, so a run stopped before writing it).
+
     Args:
         date (datetime): Date to process
         input_location (str): Either 'jpl' to grab data from JPL, or a local folder to find the data in
         output_location (str): Location to output results to
+        overwrite (bool): Re-COG even if the date is already done
         audit (bool): Only classify the existing COG as preliminary or final and return
             (status, reason). Never downloads or writes anything.
     """
+    day = date.date()
+    # Lookups shared by classify and the provenance, each fetched at most once
+    cache: dict[str, Any] = {}
+
+    def published() -> datetime | None:
+        if "published" not in cache:
+            cache["published"] = get_source_published(day)
+        return cache["published"]
+
+    def attrs() -> dict[str, str] | None:
+        if "attrs" not in cache:
+            # Earthdata login only if the NetCDF attributes are needed
+            cache["attrs"] = get_source_attrs(day, get_headers())
+        return cache["attrs"]
+
+    def title() -> str | None:
+        return (attrs() or {}).get("title")
+
     if audit:
-        produced = get_production_times(date.date(), date.date()).get(date.date())
+        produced = get_production_times(day, day).get(day)
         status, reason = classify(
-            date.date(),
-            get_cog_mtime(output_location, date),
-            produced,
-            lambda: get_source_published(date.date()),
-            # Earthdata login only if the title is needed
-            lambda: get_source_title(date.date(), get_headers()),
+            day, get_cogs_written(output_location, date), produced, published, title
         )
         log.info(f"Audit {date:%Y-%m-%d}: {status} ({reason})")
         return status, reason
@@ -668,43 +1049,66 @@ def process_date(
     log.info(
         f"Processing date {date:%Y-%m-%d} from {input_location} to {output_location}"
     )
-
     log.info(f"Overwrite: {overwrite}, Cache Local: {cache_local}")
 
     # Switch up our environment, in case we need to work on source.coop
     context = get_context()
 
     with environ(context):
-        # Check if we've done this date already
         stac_file = get_output_path(output_location, date, ".stac-item.json")
-        if _exists(stac_file) and not overwrite:
-            log.info(f"Skipping {date:%Y-%m-%d} as it already exists")
-        else:
-            input_path = get_input_path(input_location, date)
-            log.info(f"Loading data from {input_path}")
-            data = load_data(date, input_location, cache_local=cache_local, log=log)
+        stac = None if overwrite else _read_json(stac_file)
 
-            log.info("Processing data...")
-            processed = process_data(data)
+        if stac is None:
+            # Always rewrite the COGs: any left by an interrupted run might come from
+            # an older NetCDF than the one whose status the new STAC item records
+            convert_date(date, input_location, output_location, True, cache_local, log)
+            return None
 
-            if _is_s3_path(output_location):
-                log.info(f"Writing data to s3:/{output_location}")
-            else:
-                log.info(f"Writing data to {output_location}")
-            written_files = write_data(
-                processed, date, output_location, overwrite, log=log
+        current = stac.get("properties", {}).get(STATUS_PROPERTY)
+        if current == "final":
+            log.info(f"Skipping {date:%Y-%m-%d}: already final")
+            return None
+
+        produced = get_production_times(day, day).get(day)
+        cog_times = get_cog_write_times(output_location, date)
+        status, reason = classify(
+            day, oldest_write(cog_times), produced, published, title
+        )
+        action = action_for(status, reason)
+        log.info(f"{date:%Y-%m-%d}: {status} ({reason}) -> {action}")
+
+        if action == "set_status" and stac_is_stale(cog_times, _write_time(stac_file)):
+            log.info(
+                "COGs are newer than the STAC item, so re-COG rather than patch it"
             )
+            action = "reprocess"
 
-            log.info("Writing STAC")
-            stac_doc = write_stac(data, written_files, date, output_location, log=log)
+        if action == "skip":
+            return None
+        if action == "retry":
+            # Raising makes SQS retry the message, then send it to the dead-letter queue
+            raise GHRSSTException(
+                f"Can't determine the status of {date:%Y-%m-%d} yet: {status} ({reason})"
+            )
+        if action == "set_status":
+            if status == current:
+                log.info(f"STAC item already says {status}")
+                return None
+            provenance = source_provenance(
+                produced, published(), attrs(), converting=False
+            )
+            set_stac_status(stac_file, status, provenance)
+            log.info(f"Set {stac_file} status to {status}")
+            return None
 
-            # Cleanup
-            if cache_local:
-                log.info("Cleaning up cache")
-                cache_path = Path("/tmp") / FILE_STRING.format(date=date)
-                cache_path.unlink()
+        # reprocess: the COG was made from an older NetCDF than the current one
+        convert_date(date, input_location, output_location, True, cache_local, log)
+    return None
 
-            log.info(f"Finished writing to: {stac_doc.self_href}")
+
+def is_published(day: date) -> bool:
+    """Whether CMR has a granule for the date. Raises if CMR can't be reached."""
+    return day in get_production_times(day, day)
 
 
 def lambda_handler(event, _):
@@ -743,7 +1147,14 @@ def lambda_handler(event, _):
                 log=log,
             )
         except FileNotFoundError as e:
-            log.error(f"Couldn't find file for date {date:%Y-%m-%d} with error {e}")
+            if is_published(date.date()):
+                # It should exist (e.g. a transient error mid-republication), so fail
+                # and let SQS retry, then dead-letter, instead of dropping the date
+                raise GHRSSTException(
+                    f"NetCDF for {date:%Y-%m-%d} is in CMR but couldn't be read: {e}"
+                ) from e
+            # Not published yet (e.g. today): nothing to do until it is
+            log.info(f"No NetCDF published yet for {date:%Y-%m-%d}")
     else:
         raise GHRSSTException("No date found in event, exiting")
 
