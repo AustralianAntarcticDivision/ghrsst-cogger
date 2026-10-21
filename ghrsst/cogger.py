@@ -38,6 +38,9 @@ from xarray import Dataset
 COLLECTION = "ghrsst-mur-v2"
 FILE_STRING = "{date:%Y%m%d}090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc"
 FOLDER_PATH = "{date:%Y}/{date:%m}/{date:%d}"
+# Where cache_local downloads NetCDFs. Lambda's only writable disk, and it persists
+# between invocations on a warm container
+CACHE_DIR = Path("/tmp")
 JPL_BASE = "https://archive.podaac.earthdata.nasa.gov/podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/"
 CMR_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 CMR_SHORT_NAME = "MUR-JPL-L4-GLOB-v4.1"
@@ -304,7 +307,7 @@ def load_data(
 
     if cache_local:
         log.info(f"Caching {input_path} locally")
-        cache_path = Path("/tmp") / FILE_STRING.format(date=date)
+        cache_path = CACHE_DIR / FILE_STRING.format(date=date)
         download_netcdf(input_path, cache_path)
         data = xr.open_dataset(
             cache_path, chunks={}, mask_and_scale=False, drop_variables=DROP_VARIABLES
@@ -909,6 +912,16 @@ def action_for(status: str, reason: str) -> str:
     return "retry"
 
 
+def clear_cache(cache_dir: Path = CACHE_DIR) -> None:
+    """Delete any cached MUR NetCDFs, including partial downloads.
+
+    All of them, not just this date's: a Lambda container runs one conversion at a
+    time, so anything else in the cache is left over from a failed run.
+    """
+    for path in cache_dir.glob(FILE_STRING.replace("{date:%Y%m%d}", "*") + "*"):
+        path.unlink(missing_ok=True)
+
+
 def convert_date(
     date: datetime,
     input_location: str,
@@ -931,36 +944,39 @@ def convert_date(
             log.warning(f"No CMR production time for {day}: {e}")
         published = get_source_published(day)
 
-    input_path = get_input_path(input_location, date)
-    log.info(f"Loading data from {input_path}")
-    data = load_data(date, input_location, cache_local=cache_local, log=log)
-    attrs = _attrs_as_str(data.attrs)
-    status = status_from_title(day, attrs.get("title"))
-    if status is None:
-        raise GHRSSTException(
-            f"Unrecognised NetCDF title for {day}: {attrs.get('title')!r}"
-        )
-    log.info(f"Source NetCDF is {status} ({attrs.get('title')})")
-
-    log.info("Processing data...")
-    processed = process_data(data)
-
-    if _is_s3_path(output_location):
-        log.info(f"Writing data to s3:/{output_location}")
-    else:
-        log.info(f"Writing data to {output_location}")
-    written_files = write_data(processed, date, output_location, overwrite, log=log)
-
-    log.info("Writing STAC")
-    provenance = source_provenance(produced, published, attrs, converting=True)
-    stac_doc = write_stac(
-        data, written_files, date, output_location, status, provenance, log=log
-    )
-
     if cache_local:
-        log.info("Cleaning up cache")
-        cache_path = Path("/tmp") / FILE_STRING.format(date=date)
-        cache_path.unlink()
+        # Leftovers from runs that failed or timed out on this container, which would
+        # otherwise fill /tmp after a few failures
+        clear_cache()
+    try:
+        input_path = get_input_path(input_location, date)
+        log.info(f"Loading data from {input_path}")
+        data = load_data(date, input_location, cache_local=cache_local, log=log)
+        attrs = _attrs_as_str(data.attrs)
+        status = status_from_title(day, attrs.get("title"))
+        if status is None:
+            raise GHRSSTException(
+                f"Unrecognised NetCDF title for {day}: {attrs.get('title')!r}"
+            )
+        log.info(f"Source NetCDF is {status} ({attrs.get('title')})")
+
+        log.info("Processing data...")
+        processed = process_data(data)
+
+        if _is_s3_path(output_location):
+            log.info(f"Writing data to s3:/{output_location}")
+        else:
+            log.info(f"Writing data to {output_location}")
+        written_files = write_data(processed, date, output_location, overwrite, log=log)
+
+        log.info("Writing STAC")
+        provenance = source_provenance(produced, published, attrs, converting=True)
+        stac_doc = write_stac(
+            data, written_files, date, output_location, status, provenance, log=log
+        )
+    finally:
+        if cache_local:
+            clear_cache()
 
     log.info(f"Finished writing to: {stac_doc.self_href}")
     return stac_doc

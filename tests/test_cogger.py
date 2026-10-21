@@ -10,11 +10,13 @@ from odc.geo.xr import xr_coords
 
 from ghrsst.cogger import (
     FILE_EXTENSION,
+    FILE_STRING,
     JPL_BASE,
     PROCESSING_EXTENSION,
     STATUS_PROPERTY,
     VARIABLES,
     _attrs_as_str,
+    clear_cache,
     get_cog_write_times,
     get_cogs_written,
     get_output_path,
@@ -128,3 +130,18 @@ def test_stac_is_stale_when_cogs_written_after_it(tmp_path):
     # The normal order: the STAC item is written after its COGs
     assert not stac_is_stale(cog_times, datetime.now(UTC))
     assert not stac_is_stale(cog_times, None)
+
+
+def test_clear_cache_removes_only_mur_netcdfs(tmp_path):
+    # Leftovers from failed runs: a full download and an interrupted one
+    left = [
+        tmp_path / FILE_STRING.format(date=SAMPLE_DATE),
+        tmp_path / (FILE_STRING.format(date=datetime(2025, 2, 2)) + ".part"),
+    ]
+    other = [tmp_path / "other.nc", tmp_path / "notes.txt"]
+    for path in left + other:
+        path.write_bytes(b"x")
+
+    clear_cache(tmp_path)
+
+    assert sorted(tmp_path.iterdir()) == sorted(other)
