@@ -377,11 +377,9 @@ resource "aws_lambda_permission" "allow_cloudwatch_to_call_parquet" {
 }
 
 # GitHub Actions pushes release images to ECR using OIDC, no stored AWS keys.
-# Only one provider per URL is allowed per account, so other repos in this account
-# should reference this one rather than create their own.
-resource "aws_iam_openid_connect_provider" "github" {
-  url            = "https://token.actions.githubusercontent.com"
-  client_id_list = ["sts.amazonaws.com"]
+# The provider is shared across the account, so it's managed in aad-aws-foundation.
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
 }
 
 resource "aws_iam_role" "github_actions" {
@@ -392,7 +390,7 @@ resource "aws_iam_role" "github_actions" {
     Statement = [{
       Effect    = "Allow"
       Action    = "sts:AssumeRoleWithWebIdentity"
-      Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+      Principal = { Federated = data.aws_iam_openid_connect_provider.github.arn }
       Condition = {
         StringEquals = { "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com" }
         # Only version tags on the upstream repo, not forks or branches
