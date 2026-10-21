@@ -27,9 +27,12 @@ count-stac:
 get-ecr-login:
 	aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 381491825451.dkr.ecr.us-west-2.amazonaws.com
 
-# Run with `make build VERSION=0.1.0`
+# Defaults to the version in pyproject.toml; override with `make build VERSION=x.y.z`
+VERSION ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+
+# --provenance=false: Lambda rejects the multi-manifest image buildx makes by default
 build:
-	docker buildx build --platform linux/amd64 --target final -t ghrsst-cogger:latest .
+	docker buildx build --platform linux/amd64 --target final --provenance=false -t ghrsst-cogger:latest .
 	docker tag ghrsst-cogger:latest 381491825451.dkr.ecr.us-west-2.amazonaws.com/ghrsst-cogger:latest
 	docker tag ghrsst-cogger:latest 381491825451.dkr.ecr.us-west-2.amazonaws.com/ghrsst-cogger:$(VERSION)
 
@@ -39,7 +42,7 @@ push:
 
 test-docker:
 	docker buildx build --platform linux/amd64 --target test -t ghrsst-cogger:test .
-	docker run --rm -v $(PWD)/data:/code/data ghrsst-cogger:test
+	docker run --rm --platform linux/amd64 -v $(PWD)/data:/code/data ghrsst-cogger:test
 
 # CODE TESTING STUFF
 # Sample NetCDF for the tests (~700 MB). Needs an Earthdata login, see README
