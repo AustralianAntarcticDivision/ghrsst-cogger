@@ -71,9 +71,9 @@ resource "aws_sqs_queue" "ghrsst_queue" {
   name                       = "ghrsst-queue"
   delay_seconds              = 90
   max_message_size           = 2048
-  message_retention_seconds  = 86400 # 1 day
+  message_retention_seconds  = 345600 # 4 days, as a full backfill takes hours
   receive_wait_time_seconds  = 3
-  visibility_timeout_seconds = 900 # 15 minutes
+  visibility_timeout_seconds = 1800 # 30 minutes, longer than the Lambda timeout
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.ghrsst_queue_dead.arn
     maxReceiveCount     = 3
@@ -85,7 +85,7 @@ resource "aws_sqs_queue" "ghrsst_queue_dead" {
   name                      = "ghrsst-queue-dead"
   delay_seconds             = 90
   max_message_size          = 2048
-  message_retention_seconds = 86400 # 1 day
+  message_retention_seconds = 1209600 # 14 days (the maximum), to inspect failures
   receive_wait_time_seconds = 10
 }
 
@@ -99,7 +99,7 @@ resource "aws_cloudwatch_log_group" "ghrsst_log_group" {
 resource "aws_lambda_function" "ghrsst_lambda" {
   function_name = "ghrsst-lambda"
   role          = aws_iam_role.ghrsst_role.arn
-  timeout       = 480   # 8 minutes
+  timeout       = 900   # 15 minutes (the maximum), so re-COGs rarely stop partway
   memory_size   = 10240 # 10240 10 GB
   ephemeral_storage {
     size = 6000
@@ -202,6 +202,12 @@ resource "aws_lambda_event_source_mapping" "sqs_event_source_mapping" {
   event_source_arn = aws_sqs_queue.ghrsst_queue.arn
   function_name    = aws_lambda_function.ghrsst_lambda.function_name
   batch_size       = 1
+
+  # Cap concurrent conversions, so a backfill of thousands of dates doesn't flood
+  # CMR, PO.DAAC and source.coop with hundreds of Lambdas at once
+  scaling_config {
+    maximum_concurrency = 10
+  }
 }
 
 # Set up a second log group
@@ -211,7 +217,7 @@ resource "aws_cloudwatch_log_group" "ghrsst_log_group_daily" {
 }
 
 
-# The second lambda function, this one just adds the last 7 days
+# The second lambda function: queues the last N_PREVIOUS_DAYS (52) dates that are not yet final
 resource "aws_lambda_function" "daily_lambda" {
   function_name = "ghrsst-lambda-daily"
   role          = aws_iam_role.ghrsst_role_daily.arn
@@ -227,7 +233,11 @@ resource "aws_lambda_function" "daily_lambda" {
 
   environment {
     variables = {
-      SQS_QUEUE = aws_sqs_queue.ghrsst_queue.name
+      QUEUE_NAME = aws_sqs_queue.ghrsst_queue.name
+      # Read STAC items here (anonymously) to skip dates that are already final
+      OUTPUT_LOCATION = "s3://${var.destination_bucket_path}"
+      # Revisit dates long enough to catch finals (usually +9 days, up to ~40)
+      N_PREVIOUS_DAYS = "52"
     }
   }
 }
