@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -23,6 +24,7 @@ import requests
 import xarray as xr
 from affine import Affine
 from aiohttp.client_exceptions import ClientResponseError
+from boto3.session import Session
 from botocore import UNSIGNED
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -146,10 +148,21 @@ def _exists(path: Path | S3Path) -> bool:
         return path.exists()
 
 
+_PUBLIC_S3_LOCK = threading.Lock()
+
+
 def _public_s3():
     # ponytail: unsigned and us-west-2 only, fine for the public source.coop bucket.
     # Pass a signed client in if a private bucket ever needs auditing.
-    return boto3.client(
+    # One client, shared by the lookup threads: clients are thread-safe, but creating
+    # them isn't, so the first call is locked and uses its own session
+    with _PUBLIC_S3_LOCK:
+        return _make_public_s3()
+
+
+@functools.cache
+def _make_public_s3():
+    return Session().client(
         "s3", region_name="us-west-2", config=Config(signature_version=UNSIGNED)
     )
 
