@@ -2,7 +2,13 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from ghrsst.cogger import classify, parse_production_times
+from ghrsst.cogger import (
+    CMR_PAGE_SIZE,
+    GHRSSTException,
+    check_cmr_complete,
+    classify,
+    parse_production_times,
+)
 
 DAY = date(2025, 12, 10)
 FINAL = "Daily MUR SST, Final product"
@@ -147,3 +153,18 @@ def test_parse_matches_granule_ur_not_window():
     times = parse_production_times(umm_json)
     assert times[DAY] == datetime(2025, 12, 19, 7, 17, 35, tzinfo=UTC)
     assert set(times) == {DAY, date(2025, 12, 11)}
+
+
+def test_check_cmr_complete():
+    day = date(2026, 10, 10)
+    item = {"umm": {}}
+    check_cmr_complete({"hits": 2, "items": [item, item]}, day, day)
+    check_cmr_complete({"hits": 0, "items": []}, day, day)
+    # CMR counting granules it can't return (seen for 2026-10-08 to 10-16)
+    with pytest.raises(GHRSSTException, match="index is probably behind"):
+        check_cmr_complete({"hits": 2, "items": []}, day, day)
+    # A full page: truncated, so the range is too long
+    with pytest.raises(GHRSSTException, match="shorter range"):
+        check_cmr_complete(
+            {"hits": 3000, "items": [item] * CMR_PAGE_SIZE}, day, date(2033, 1, 1)
+        )
