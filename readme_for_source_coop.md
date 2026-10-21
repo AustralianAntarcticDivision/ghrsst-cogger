@@ -15,11 +15,40 @@ For more information, please refer to the [documentation](https://podaac.jpl.nas
 
 ## About this repository
 
-The [code used to repackage this data is accessible here](https://github.com/auspatious/ghrsst-cogger).
+The [code used to repackage this data is accessible here](https://github.com/AustralianAntarcticDivision/ghrsst-cogger).
 
 Care has been taken to not change the source data, but just to repackage it into cloud optimised geotiffs with
 STAC metadata. Each daily dataset is accessible in a `<year>/<month>/<day>` path, and file names are consistent with the
 source data, e.g., `"{$Y%m%d}090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.stac-item.json`.
+
+## Preliminary and final data
+
+MUR publishes each day twice: a near-real-time (NRT) version about 1 day after the date,
+then a final version, usually 9 days after it (occasionally later), which replaces it.
+New days are converted from the NRT version as soon as it's available, then re-converted
+once the final version is published.
+
+Every STAC item says which version its COGs were made from:
+
+| Property | Meaning |
+|---|---|
+| `ghrsst:status` | `final`: made from the final version. `preliminary`: made from the NRT version; a final is expected and the COGs will be replaced. `nrt_only`: the archived source is still the NRT version more than 50 days after the date, so no final was published. |
+| `processing:lineage` | The source NetCDF's title, e.g. `Daily MUR SST, Final product` |
+| `processing:datetime` | When JPL produced the source NetCDF |
+| `ghrsst:source_published` | When PO.DAAC published the source NetCDF |
+| `processing:version`, `processing:level`, `processing:facility` | MUR product version (`04.1`), level (`L4`) and producer (`NASA JPL`) |
+| `processing:software` | Software versions used for the conversion (set when the COGs are made) |
+| `updated` | When the COGs were last (re)made |
+| `file:checksum`, `file:size` (on each COG asset) | SHA2-256 multihash and size of the COG, from the [File extension](https://github.com/stac-extensions/file) |
+
+The `processing:*` fields follow the [STAC Processing extension](https://github.com/stac-extensions/processing).
+Each item also has a `derived_from` link to the source NetCDF. For research that needs the
+final analysis, filter on `ghrsst:status = final`.
+
+When a day's final version replaces its NRT version, its COGs are re-made **at the same
+URLs**, so the byte offsets inside them change. If you hold byte-range references to these
+COGs (kerchunk, virtual Zarr, Icechunk virtual chunks), check `file:checksum` (or the HTTP
+`ETag`) and regenerate the references when it changes.
 
 ## Accessing data
 
@@ -84,6 +113,9 @@ items = (await rustac.read(url))["features"]
 #     bbox=bbox,
 #     datetime=f"{year}-01-01T00:00:00.000Z/{year}-12-31T23:59:59.999Z",
 # )
+
+# Keep only days made from the final (not near-real-time) version
+items = [i for i in items if i["properties"].get("ghrsst:status") == "final"]
 
 items = [pystac.Item.from_dict(i) for i in items]
 
