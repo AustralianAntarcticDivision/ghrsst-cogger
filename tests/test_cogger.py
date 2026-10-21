@@ -15,11 +15,13 @@ from ghrsst.cogger import (
     STATUS_PROPERTY,
     VARIABLES,
     _attrs_as_str,
+    get_cog_write_times,
     get_cogs_written,
     get_output_path,
     process_data,
     process_date,
     source_provenance,
+    stac_is_stale,
     status_from_title,
     write_data,
     write_stac,
@@ -109,3 +111,20 @@ def test_get_cogs_written_uses_oldest_existing_cog(tmp_path):
     # No analysed_sst: the COGs are missing
     cog("analysed_sst").unlink()
     assert get_cogs_written(tmp_path, SAMPLE_DATE) is None
+
+
+def test_stac_is_stale_when_cogs_written_after_it(tmp_path):
+    # A run that wrote the COGs and stopped before the STAC item
+    stac_file = get_output_path(tmp_path, SAMPLE_DATE, ".stac-item.json")
+    stac_file.parent.mkdir(parents=True)
+    stac_file.write_text("{}")
+    stac_written = datetime(2025, 3, 20, 14, 8, tzinfo=UTC)
+    os.utime(stac_file, (stac_written.timestamp(), stac_written.timestamp()))
+    for var in VARIABLES:
+        get_output_path(tmp_path, SAMPLE_DATE, f"_{var}.tif").touch()  # now
+
+    cog_times = get_cog_write_times(tmp_path, SAMPLE_DATE)
+    assert stac_is_stale(cog_times, stac_written)
+    # The normal order: the STAC item is written after its COGs
+    assert not stac_is_stale(cog_times, datetime.now(UTC))
+    assert not stac_is_stale(cog_times, None)

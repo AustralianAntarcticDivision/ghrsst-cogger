@@ -796,14 +796,32 @@ def _write_time(path: Path | S3Path) -> datetime | None:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
 
 
+def get_cog_write_times(
+    output_location: Path | S3Path, date: datetime
+) -> dict[str, datetime | None]:
+    """Each of the date's COGs' write time, by variable (None if it doesn't exist)."""
+    return {
+        var: _write_time(get_output_path(output_location, date, f"_{var}.tif"))
+        for var in VARIABLES
+    }
+
+
 def get_cogs_written(output_location: Path | S3Path, date: datetime) -> datetime | None:
     """When the date's COGs were written: the oldest of them (see oldest_write)."""
-    return oldest_write(
-        {
-            var: _write_time(get_output_path(output_location, date, f"_{var}.tif"))
-            for var in VARIABLES
-        }
-    )
+    return oldest_write(get_cog_write_times(output_location, date))
+
+
+def stac_is_stale(
+    cog_times: Mapping[str, datetime | None], stac_written: datetime | None
+) -> bool:
+    """Whether any COG was written after the STAC item, so the item doesn't describe it.
+
+    The STAC item is always written after its COGs, so this only happens when a run
+    stopped between the two (or another run wrote the COGs meanwhile). Patching the
+    status onto that item would leave the new COGs without their checksums.
+    """
+    written = [t for t in cog_times.values() if t is not None]
+    return stac_written is not None and bool(written) and max(written) > stac_written
 
 
 def classify(
@@ -962,7 +980,8 @@ def process_date(
     Converts dates with no STAC item. For dates that have one, records or finalises
     their status: if the STAC item already says final it stops there. Otherwise it
     classifies the existing COG (the audit's rules) and either just updates the
-    STAC item's status, or re-COGs if the COG was made from an older NetCDF.
+    STAC item's status, or re-COGs if the COG was made from an older NetCDF (or is
+    newer than the STAC item, so a run stopped before writing it).
 
     Args:
         date (datetime): Date to process
@@ -1022,11 +1041,18 @@ def process_date(
             return None
 
         produced = get_production_times(day, day).get(day)
+        cog_times = get_cog_write_times(output_location, date)
         status, reason = classify(
-            day, get_cogs_written(output_location, date), produced, published, title
+            day, oldest_write(cog_times), produced, published, title
         )
         action = action_for(status, reason)
         log.info(f"{date:%Y-%m-%d}: {status} ({reason}) -> {action}")
+
+        if action == "set_status" and stac_is_stale(cog_times, _write_time(stac_file)):
+            log.info(
+                "COGs are newer than the STAC item, so re-COG rather than patch it"
+            )
+            action = "reprocess"
 
         if action == "skip":
             return None

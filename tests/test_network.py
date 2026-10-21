@@ -7,7 +7,7 @@ EARTHDATA_PASSWORD (or EARTHDATA_TOKEN), and are skipped without them.
 
 import asyncio
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 import rustac
@@ -97,18 +97,20 @@ def test_create_parquet_from_source_coop(tmp_path):
     ]
 
 
-@needs_login
-def test_finalise_sets_status_without_touching_cogs(tmp_path):
-    """The Lambda's path for an old final date, on a local copy of its prod metadata."""
+def _stage_prod_metadata(out, day, stac_age=None):
+    """A local copy of a date's prod STAC item (without its status, as before the
+    backfill), and placeholder COGs with the real write times (4 for 2002).
+
+    With stac_age, the STAC item is stamped that long before the oldest COG instead,
+    as after a run that stopped between the COG and STAC writes.
+    """
     import json
 
     from ghrsst.cogger import STATUS_PROPERTY, VARIABLES, _public_s3, get_output_path
 
-    day = datetime(2002, 6, 1)
     s3 = _public_s3()
-    # The real STAC item, and placeholder COGs with the real write times (4 for 2002)
     for ext in [f"_{v}.tif" for v in VARIABLES] + [".stac-item.json"]:
-        src, dst = get_output_path(PROD, day, ext), get_output_path(tmp_path, day, ext)
+        src, dst = get_output_path(PROD, day, ext), get_output_path(out, day, ext)
         dst.parent.mkdir(parents=True, exist_ok=True)
         try:
             obj = s3.head_object(Bucket=src.bucket, Key=src.key)
@@ -117,18 +119,48 @@ def test_finalise_sets_status_without_touching_cogs(tmp_path):
         if ext.endswith(".json"):
             body = s3.get_object(Bucket=src.bucket, Key=src.key)["Body"].read()
             doc = json.loads(body)
-            doc["properties"].pop(STATUS_PROPERTY, None)  # as before the backfill
+            doc["properties"].pop(STATUS_PROPERTY, None)
             dst.write_text(json.dumps(doc))
         else:
             dst.touch()
         t = obj["LastModified"].timestamp()
         os.utime(dst, (t, t))
+    stac_file = get_output_path(out, day, ".stac-item.json")
+    if stac_age is not None:
+        oldest = min(p.stat().st_mtime for p in out.rglob("*.tif"))
+        t = oldest - stac_age.total_seconds()
+        os.utime(stac_file, (t, t))
+    return stac_file
+
+
+@needs_login
+def test_finalise_sets_status_without_touching_cogs(tmp_path):
+    """The Lambda's path for an old final date, on a local copy of its prod metadata."""
+    import json
+
+    from ghrsst.cogger import STATUS_PROPERTY
+
+    day = datetime(2002, 6, 1)
+    stac_file = _stage_prod_metadata(tmp_path, day)
     cogs = sorted(tmp_path.rglob("*.tif"))
     before = {p: p.stat().st_mtime for p in cogs}
 
     process_date(day, "JPL", tmp_path)
 
-    stac = json.loads(get_output_path(tmp_path, day, ".stac-item.json").read_text())
+    stac = json.loads(stac_file.read_text())
     assert stac["properties"][STATUS_PROPERTY] == "final"
     assert stac["properties"]["processing:lineage"] == "Daily MUR SST, Final product"
     assert {p: p.stat().st_mtime for p in cogs} == before  # COGs untouched
+
+
+@needs_login
+def test_finalise_recogs_when_stac_older_than_cogs(tmp_path):
+    """A final date whose STAC item predates its COGs is re-COGed, not patched."""
+    day = datetime(2002, 6, 1)
+    stac_file = _stage_prod_metadata(tmp_path, day, stac_age=timedelta(hours=1))
+    before = stac_file.read_text()
+
+    # The empty input folder stands in for the download: reaching it means re-COG
+    with pytest.raises(FileNotFoundError):
+        process_date(day, str(tmp_path / "input"), tmp_path)
+    assert stac_file.read_text() == before  # status not patched on
