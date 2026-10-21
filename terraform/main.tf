@@ -204,9 +204,10 @@ resource "aws_lambda_event_source_mapping" "sqs_event_source_mapping" {
   batch_size       = 1
 
   # Cap concurrent conversions, so a backfill of thousands of dates doesn't flood
-  # CMR, PO.DAAC and source.coop with hundreds of Lambdas at once
+  # CMR, PO.DAAC and source.coop with hundreds of Lambdas at once. At 20, PO.DAAC
+  # started returning 403s on its signed S3 links (2026-10-22 backfill)
   scaling_config {
-    maximum_concurrency = 10
+    maximum_concurrency = 15
   }
 }
 
