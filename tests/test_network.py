@@ -40,6 +40,13 @@ def test_cmr_production_time():
     assert date(2024, 8, 2) in times
 
 
+def test_is_published():
+    from ghrsst.cogger import is_published
+
+    assert is_published(date(2024, 8, 1)) is True
+    assert is_published(date(2030, 1, 1)) is False
+
+
 def test_publication_time():
     published = get_source_published(date(2025, 2, 1))
     assert published == datetime(2025, 2, 10, 7, 32, 16, tzinfo=UTC)

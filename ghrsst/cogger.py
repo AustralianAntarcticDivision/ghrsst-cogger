@@ -1051,6 +1051,11 @@ def process_date(
     return None
 
 
+def is_published(day: date) -> bool:
+    """Whether CMR has a granule for the date. Raises if CMR can't be reached."""
+    return day in get_production_times(day, day)
+
+
 def lambda_handler(event, _):
     # Set up a tidy logger, but try to use the AWS way of logging
     log = LOGGER
@@ -1087,7 +1092,14 @@ def lambda_handler(event, _):
                 log=log,
             )
         except FileNotFoundError as e:
-            log.error(f"Couldn't find file for date {date:%Y-%m-%d} with error {e}")
+            if is_published(date.date()):
+                # It should exist (e.g. a transient error mid-republication), so fail
+                # and let SQS retry, then dead-letter, instead of dropping the date
+                raise GHRSSTException(
+                    f"NetCDF for {date:%Y-%m-%d} is in CMR but couldn't be read: {e}"
+                ) from e
+            # Not published yet (e.g. today): nothing to do until it is
+            log.info(f"No NetCDF published yet for {date:%Y-%m-%d}")
     else:
         raise GHRSSTException("No date found in event, exiting")
 

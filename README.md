@@ -114,6 +114,19 @@ The queue runs at most 10 Lambdas at once (`maximum_concurrency`) and keeps mess
 4 days; failed messages stay in the dead-letter queue for 14 days. Each Lambda can run
 for up to 15 minutes.
 
+A date fails, and is retried, when its status can't be determined yet (e.g. CMR is missing
+a record), or when its NetCDF is in CMR but can't be downloaded. A date whose NetCDF isn't
+published yet (e.g. today) is just skipped. After 3 failed attempts a message moves to the
+dead-letter queue. Once the cause has cleared, move those messages back to the main queue:
+
+```bash
+aws sqs get-queue-attributes --attribute-names ApproximateNumberOfMessages \
+  --queue-url "$(aws sqs get-queue-url --queue-name ghrsst-queue-dead --query QueueUrl --output text)"
+aws sqs start-message-move-task \
+  --source-arn arn:aws:sqs:us-west-2:381491825451:ghrsst-queue-dead \
+  --destination-arn arn:aws:sqs:us-west-2:381491825451:ghrsst-queue
+```
+
 Re-made COGs keep their URLs, so their byte offsets change. Each re-made asset records
 `file:checksum` and `file:size`, and its item has `updated`, so anyone holding byte-range
 references (kerchunk, virtual Zarr) can detect the change.
