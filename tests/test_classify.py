@@ -102,7 +102,7 @@ def test_old_nrt_netcdf_is_nrt_only():
     produced = datetime(2015, 4, 25, 2, 43, tzinfo=UTC)
     status = classify(old, at(20, 3, 2025), produced, value(produced), value(NRT))
     assert status == (
-        "source_nrt_only",
+        "nrt_only",
         "Archived NetCDF is still NRT; no final published",
     )
 

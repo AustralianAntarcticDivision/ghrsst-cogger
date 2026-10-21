@@ -48,6 +48,10 @@ download-test-data: data/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04
 test:
 	uv run pytest tests/
 
+# Against the real CMR, PO.DAAC and source.coop. Set EARTHDATA_* for the NetCDF header test
+test-network:
+	uv run pytest tests/ -m network
+
 # Count preliminary vs final COGs on source.coop. Read-only, writes data/audit.csv.
 # Needs EARTHDATA_USERNAME and EARTHDATA_PASSWORD (or EARTHDATA_TOKEN). Re-run to resume
 audit:
@@ -61,7 +65,7 @@ format:
 	uv run ruff format .
 
 data/20231106090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc:
-	uv run python -c "import earthaccess; earthaccess.login(); earthaccess.download(['https://archive.podaac.earthdata.nasa.gov/podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/$(notdir $@)'], 'data')"
+	uv run python -c "from pathlib import Path; from ghrsst.cogger import JPL_BASE, download_netcdf; download_netcdf(JPL_BASE + '$(notdir $@)', Path('$@'))"
 
 run-source-coop:
 	python3 ghrsst/cogger.py \
