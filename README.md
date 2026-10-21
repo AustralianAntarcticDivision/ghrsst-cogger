@@ -126,15 +126,17 @@ with `make test-docker`.
 
 ## Cost calculation
 
-Lambda costs `0.0000133334` per GB second, and `ghrsst-lambda` runs with `10 GB` of
-memory. A conversion takes around 5 minutes, so about $0.04.
+Lambda (x86) costs `$0.0000166667` per GB-second, after a free tier of 400k GB-s a month.
+`ghrsst-lambda` runs with `10 GB` of memory, so a ~3–5 minute conversion is about $0.03–0.05.
 
-- **Original bulk conversion** (~8,900 dates, 2025): `8900 * 0.0000133334 * 10 * 5 * 60`,
-  about $350.
-- **Finalise backfill:** about 623 re-COGs (~$25), plus quick status-only updates.
+- **Finalise backfill (one-off):** about 1.9–2.3M GB-s, so about **$25–32** once the free
+  tier is used up:
+  - about 623 re-COGs (~1.1M GB-s)
+  - about 8,280 status-only updates at ~10–15 s each (~0.8–1.2M GB-s)
+
+  Splitting it across two calendar months saves ~$7.
 - **Daily:** about 2 conversions a day (the newest date, and the one whose final just
-  landed). Dates that are already final aren't queued. This stays roughly within the
-  Lambda free tier.
+  landed). Dates already final aren't queued, so this stays within the free tier.
 
 ## AWS access
 
