@@ -24,7 +24,7 @@ packages:
   `readghrsst(date, xylim = ...)` returns a raster for a date and a region.
 
 GHRSST MUR was one of those mirrors: one NetCDF file per day from 2002-06-01, about
-8,900 files and several terabytes, with five gridded variables in each.
+8,900 files and several terabytes, with up to six gridded variables in each.
 
 This works well for anyone on the network with the file system mounted. It has costs
 that grow with time:
@@ -56,7 +56,9 @@ HTTP, and publishes it openly on
   with HTTP range requests. A whole-world preview reads a few small overview tiles,
   not the full 36000 by 17999 grid.
 - **The values are unchanged.** The integers are written as they are in the NetCDF,
-  with their scale and offset, so nothing is lost or rounded.
+  with a scale and offset to convert them, so nothing is lost or rounded. (For
+  `analysed_sst` the COG's offset gives degrees Celsius; the STAC item keeps the
+  source's Kelvin.)
 - **The grid is fixed once.** North-up, with an exact geotransform (0.01 degree pixels,
   top-left corner at -179.995, 89.995), so every GDAL-based reader agrees on where each
   pixel is.
@@ -88,17 +90,19 @@ The same `/vsicurl/` URLs work from anywhere, with or without raadtools.
 
 ## Preliminary data, and the audit
 
-The first bulk conversion, in early 2025, used final files for nearly every date. From
-February 2025 a daily job converted each new day about two days after its date, which is
-the near-real-time version, and it never revisited a day once converted. So from
-2025-02-02 the COGs were preliminary, although nothing said so.
+The bulk conversions in early 2025 used final files for nearly every date, but the
+finals for the last days of that run, after 2025-02-01, weren't published yet, so those
+were made from near-real-time files. From 2025-02-10 a daily job converted each new day
+about two days after its date, which is again the near-real-time version, and it never
+revisited a day once converted. So from 2025-02-02 the COGs were preliminary, although
+nothing said so.
 
 In October 2026 an audit compared every COG's write time with when each source file was
 produced and published, and read each source file's own title. It found:
 
 | Result | Days |
 |---|---|
-| Made from the final version | 8,230 (2002-06-01 to 2025-02-01) |
+| Made from the final version | 8,230 (of the 8,282 days from 2002-06-01 to 2025-02-01) |
 | Made from a near-real-time version since replaced by a final | 623 (2025-02-02 onwards) |
 | Made from a near-real-time version whose final was not yet out | 1 |
 | Source still near-real-time years later (no final was ever published) | 50 |

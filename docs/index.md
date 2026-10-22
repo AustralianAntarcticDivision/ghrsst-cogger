@@ -12,8 +12,9 @@ item per day and a STAC GeoParquet index of all days. The data are public on
 are kept up to date by a daily job.
 
 The values are the source values. Each NetCDF variable becomes one COG per day, stored
-as the same integers with the same scale and offset, on an exact north-up 0.01 degree
-grid. What changes is the packaging: any tool that reads a GeoTIFF over HTTP can now read
+as the same integers with nodata, scale and offset in the metadata, on an exact north-up
+0.01 degree grid. (For `analysed_sst` the COG's offset gives degrees Celsius, where the
+source's gives Kelvin; see [Values and units](data.md#values-and-units).) What changes is the packaging: any tool that reads a GeoTIFF over HTTP can now read
 just the part of the world, and the resolution, it needs.
 
 ## Start here
