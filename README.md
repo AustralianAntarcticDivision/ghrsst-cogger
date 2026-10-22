@@ -110,7 +110,7 @@ To backfill every date, with your AWS credentials for the IDEA_AAD account:
 python -m ghrsst.dategen --start 2002-06-01   # optional --end YYYY-MM-DD; --include-final to re-check final dates too
 ```
 
-The queue runs at most 10 Lambdas at once (`maximum_concurrency`) and keeps messages for
+The queue runs at most 15 Lambdas at once (`maximum_concurrency`) and keeps messages for
 4 days; failed messages stay in the dead-letter queue for 14 days. Each Lambda can run
 for up to 15 minutes.
 

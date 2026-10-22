@@ -46,6 +46,8 @@ CACHE_DIR = Path("/tmp")
 JPL_BASE = "https://archive.podaac.earthdata.nasa.gov/podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/"
 CMR_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 CMR_SHORT_NAME = "MUR-JPL-L4-GLOB-v4.1"
+# CMR's largest page. A response at this size may be truncated
+CMR_PAGE_SIZE = 2000
 # The cogger downloads the NetCDF at most one Lambda run (15 min) before it writes the
 # COG. A COG written less than this after the NetCDF was published may have been made
 # from the previous version, so it's too close to call and gets reprocessed
@@ -673,6 +675,27 @@ def parse_production_times(umm_json: dict) -> dict[date, datetime]:
     return times
 
 
+def check_cmr_complete(umm_json: dict, start: date, end: date) -> None:
+    """Raise if CMR returned fewer granule records than it counted as hits.
+
+    Two causes, told apart by the page size. A full page means CMR truncated the
+    results, so the range is too long. A short page means CMR counts granules it
+    can't return: its index lags behind a PO.DAAC republish, which clears by itself.
+    """
+    hits, returned = umm_json["hits"], len(umm_json["items"])
+    if hits <= returned:
+        return
+    if returned >= CMR_PAGE_SIZE:
+        raise GHRSSTException(
+            f"CMR returned {returned} of {hits} granules for {start} to {end} "
+            f"(its {CMR_PAGE_SIZE}-granule page limit); query a shorter range"
+        )
+    raise GHRSSTException(
+        f"CMR counts {hits} granules for {start} to {end} but returned {returned} "
+        "records. Its index is probably behind a PO.DAAC republish; try again later"
+    )
+
+
 def get_production_times(start: date, end: date) -> dict[date, datetime]:
     """When each MUR NetCDF from start to end (inclusive) was last produced, from CMR."""
     try:
@@ -681,7 +704,7 @@ def get_production_times(start: date, end: date) -> dict[date, datetime]:
             params={
                 "short_name": CMR_SHORT_NAME,
                 "temporal": f"{start:%Y-%m-%d}T00:00:00Z,{end:%Y-%m-%d}T23:59:59Z",
-                "page_size": 2000,
+                "page_size": CMR_PAGE_SIZE,
             },
             timeout=(CONNECT_TIMEOUT, 120),
         )
@@ -699,12 +722,7 @@ def get_production_times(start: date, end: date) -> dict[date, datetime]:
             ) from e
         raise
     umm_json = response.json()
-    # CMR caps a page at 2000 granules and truncates silently, so check
-    if umm_json["hits"] > len(umm_json["items"]):
-        raise GHRSSTException(
-            f"CMR returned {len(umm_json['items'])} of {umm_json['hits']} granules "
-            f"for {start} to {end}; query a shorter range"
-        )
+    check_cmr_complete(umm_json, start, end)
     return parse_production_times(umm_json)
 
 
