@@ -59,6 +59,18 @@ URLs**, so the byte offsets inside them change. If you hold byte-range reference
 COGs (kerchunk, virtual Zarr, Icechunk virtual chunks), check `file:checksum` (or the HTTP
 `ETag`) and regenerate the references when it changes.
 
+### Data Variables
+
+| Name | Long Name | Unit |
+|------|-----------|------|
+| analysed_sst | analysed sea surface temperature | kelvin |
+| analysis_error | estimated error standard deviation of analysed_sst | kelvin |
+| lat | latitude | degrees_north |
+| lon | longitude | degrees_east |
+| mask | sea/land field composite mask | - |
+| sea_ice_fraction | sea ice area fraction | fraction (between 0 and 1) |
+| time | reference time of sst field | seconds since 1981-01-01 00:00:00 UTC |
+
 ## Accessing data
 
 ### Using Python
