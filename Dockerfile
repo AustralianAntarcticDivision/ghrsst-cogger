@@ -29,6 +29,6 @@ CMD ["pytest", "tests/", "-v"]
 
 # Final stage = base, i.e. the Lambda image with no dev deps
 FROM base AS final
-RUN python -c "import ghrsst.cogger, ghrsst.dategen, ghrsst.create_parquet"
+RUN python -c "import ghrsst.cogger, ghrsst.dategen, ghrsst.create_parquet, ghrsst.create_vrt"
 ENTRYPOINT ["python", "-m", "awslambdaric"]
 CMD ["ghrsst.cogger.lambda_handler"]

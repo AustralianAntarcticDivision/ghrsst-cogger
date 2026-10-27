@@ -1,6 +1,6 @@
 [project]
 name = "ghrsst-cogger"
-version = "0.13.1"
+version = "0.14.0"
 description = "Convert GHRSST MUR NetCDF to Cloud Optimised GeoTIFFs with STAC metadata"
 readme = "README.md"
 requires-python = "==3.12.*"
@@ -23,7 +23,13 @@ dependencies = [
     "rustac>=0.9.17,<0.10",
     "s3path>=0.6.5,<0.7",
     "xarray>=2026.9.0",
+    "xvrt",
 ]
+
+[tool.uv.sources]
+# Multidim VRT writer, not on PyPI yet: a pinned commit archive (the slim
+# image has no git, so not a git source).
+xvrt = { url = "https://github.com/rgdal-dev/xvrt/archive/0cd1fed209f0a5bc3dfd8f0fb95d0c02fff1cc54.tar.gz" }
 
 [dependency-groups]
 dev = [

@@ -20,6 +20,12 @@ update-readme:
 	AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED \
 		aws s3 cp readme_for_source_coop.md s3://ausantarctic/ghrsst-mur-v2/README.md
 
+# Rebuild ghrsst-mur-v2.vrt from the published parquet and upload it. The daily
+# parquet Lambda also does this; use this to refresh it by hand.
+update-vrt:
+	AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED \
+		uv run python -m ghrsst.create_vrt --output-location s3://ausantarctic/ghrsst-mur-v2
+
 count-stac:
 	aws s3 ls --recursive s3://ausantarctic/ghrsst-mur-v2/ | grep '\.json$' | wc -
 

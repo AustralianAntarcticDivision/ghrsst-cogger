@@ -133,6 +133,49 @@ data = load(items, bbox=bbox, chunks={})
 data
 ```
 
+### All dates as one cube: multidimensional VRT
+
+`ghrsst-mur-v2.vrt` describes every COG as one GDAL multidimensional dataset:
+five `(time, y, x)` arrays (`analysed_sst`, `analysis_error`, `mask`,
+`sea_ice_fraction`, `sst_anomaly`) on the shared 0.01 degree grid, one time
+step per day from 2002-06-01. It is rebuilt with the STAC Parquet file each
+day and holds no data itself: reads go to the COGs, and only the COGs a read
+touches are opened. Days without a file for a variable (`sst_anomaly` before
+2014) read as nodata.
+
+Scale, offset and units come from the STAC metadata, which matches the COG
+headers: `analysed_sst`, `analysis_error` and `sst_anomaly` unscale to degrees
+Celsius.
+
+```bash
+gdal mdim info /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt
+```
+
+```python
+from osgeo import gdal
+
+gdal.UseExceptions()
+vrt = "/vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt"
+ds = gdal.OpenEx(vrt, gdal.OF_MULTIDIM_RASTER)
+sst = ds.GetRootGroup().OpenMDArray("analysed_sst").GetUnscaled()  # celsius
+
+# The last 30 days at 44S 150E (row and column on the 0.01 degree grid)
+n = sst.GetDimensions()[0].GetSize()
+row, col = round((89.995 + 44) / 0.01), round((179.995 + 150) / 0.01)
+series = sst.ReadAsArray(array_start_idx=[n - 30, row, col], count=[30, 1, 1]).ravel()
+print(series)
+```
+
+Any reader of GDAL's multidimensional API can open it, for example an xarray
+backend for GDAL:
+
+```python
+import xarray as xr
+
+ds = xr.open_dataset(vrt, engine="gdalxarray")
+ds.analysed_sst.sel(time="2025-02-14").sel(y=-44, x=150, method="nearest")
+```
+
 ### Using R
 
 The 'analysed_sst' files are templated by:

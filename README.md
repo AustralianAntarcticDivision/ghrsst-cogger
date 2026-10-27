@@ -22,7 +22,10 @@ The architecture for this process has the following components:
     queues the last 52 days, skipping dates that are already final, so new dates are
     converted and preliminary ones are finalised when the final NetCDF lands
   * `ghrsst-lambda-parquet-daily`: runs every day at 01:00 UTC and rebuilds
-    `ghrsst-mur-v2.parquet`, a STAC GeoParquet index of every date from 2002-06-01
+    `ghrsst-mur-v2.parquet`, a STAC GeoParquet index of every date from 2002-06-01,
+    and from the same items `ghrsst-mur-v2.vrt`, a GDAL multidimensional VRT over
+    every COG ([create_vrt.py](ghrsst/create_vrt.py); `WRITE_VRT=false` turns it
+    off, `make update-vrt` rebuilds it by hand from the published parquet)
   * A GitHub OIDC role that lets the release workflow push images to ECR
 
 ![Architecture](architecture.png).

@@ -8,6 +8,7 @@ import rustac
 from s3path import S3Path
 
 from ghrsst.cogger import GHRSSTException, get_logger, get_output_path
+from ghrsst.create_vrt import publish_vrt
 
 LOGGER = get_logger(__name__)
 
@@ -44,6 +45,7 @@ async def create_parquet(
     input_location: str,
     output_location: str,
     write_tempfile: bool = False,
+    write_vrt: bool = True,
     log: Logger = LOGGER,
 ) -> int:
     dates = [
@@ -90,6 +92,11 @@ async def create_parquet(
     else:
         await rustac.write(out, items)
 
+    # The multidim VRT over every COG, from the same items. After the parquet,
+    # so a VRT problem never blocks the catalogue update.
+    if write_vrt:
+        publish_vrt(items, output_location, log=log)
+
     return len(items)
 
 
@@ -110,6 +117,7 @@ def lambda_handler(event, _):
         "s3://", "s3:/"
     )
     write_tempfile = os.environ.get("WRITE_TEMPFILE", "true").lower() == "true"
+    write_vrt = os.environ.get("WRITE_VRT", "true").lower() == "true"
 
     result = asyncio.run(
         create_parquet(
@@ -118,6 +126,7 @@ def lambda_handler(event, _):
             input_location=input_location,
             output_location=output_location,
             write_tempfile=write_tempfile,
+            write_vrt=write_vrt,
             log=log,
         )
     )
@@ -130,8 +139,13 @@ def lambda_handler(event, _):
 @click.option("--input-location", type=str, default="s3://ausantarctic/ghrsst-mur-v2")
 @click.option("--output-location", type=str, default=None)
 @click.option("--write-tempfile/--no-write-tempfile", is_flag=True, default=True)
+@click.option(
+    "--vrt/--no-vrt", "write_vrt", default=True, help="Also write ghrsst-mur-v2.vrt"
+)
 @click.command("create-parquet")
-def main(start_date, end_date, input_location, output_location, write_tempfile):
+def main(
+    start_date, end_date, input_location, output_location, write_tempfile, write_vrt
+):
     start_date = datetime.strptime(start_date, "%Y-%m-%d")
     end_date = datetime.strptime(end_date, "%Y-%m-%d")
 
@@ -152,6 +166,7 @@ def main(start_date, end_date, input_location, output_location, write_tempfile):
                 input_location=input_location,
                 output_location=output_location,
                 write_tempfile=write_tempfile,
+                write_vrt=write_vrt,
                 log=log,
             )
         )

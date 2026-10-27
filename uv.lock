@@ -321,7 +321,7 @@ wheels = [
 
 [[package]]
 name = "ghrsst-cogger"
-version = "0.13.1"
+version = "0.14.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -340,6 +340,7 @@ dependencies = [
     { name = "rustac" },
     { name = "s3path" },
     { name = "xarray" },
+    { name = "xvrt" },
 ]
 
 [package.dev-dependencies]
@@ -368,6 +369,7 @@ requires-dist = [
     { name = "rustac", specifier = ">=0.9.17,<0.10" },
     { name = "s3path", specifier = ">=0.6.5,<0.7" },
     { name = "xarray", specifier = ">=2026.9.0" },
+    { name = "xvrt", url = "https://github.com/rgdal-dev/xvrt/archive/0cd1fed209f0a5bc3dfd8f0fb95d0c02fff1cc54.tar.gz" },
 ]
 
 [package.metadata.requires-dev]
@@ -1462,6 +1464,30 @@ sdist = { url = "https://files.pythonhosted.org/packages/ff/f5/781c70b234f54e040
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3f/44/3159af4fb3c868970a412e294320ed6bb1a9fbdfa6431050eda8e0b34b6e/xarray-2026.9.0-py3-none-any.whl", hash = "sha256:fe349fa871628b1a0a5217af3fe1283a2862d5485156e6eda354fffb81c3bb7c", size = 1445445, upload-time = "2026-09-29T23:06:23.686Z" },
 ]
+
+[[package]]
+name = "xvrt"
+version = "0.0.1.9000"
+source = { url = "https://github.com/rgdal-dev/xvrt/archive/0cd1fed209f0a5bc3dfd8f0fb95d0c02fff1cc54.tar.gz" }
+dependencies = [
+    { name = "numpy" },
+    { name = "xarray" },
+]
+sdist = { hash = "sha256:d5b71456c137c16b58311fd89ecd8329f4377ae76064dee63385f21bd29e0388" }
+
+[package.metadata]
+requires-dist = [
+    { name = "cf-xarray", marker = "extra == 'cf'" },
+    { name = "dask", marker = "extra == 'test'" },
+    { name = "h5netcdf", marker = "extra == 'test'" },
+    { name = "lxml", marker = "extra == 'test'" },
+    { name = "netcdf4", marker = "extra == 'test'" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "rioxarray", marker = "extra == 'rio'" },
+    { name = "xarray", specifier = ">=2023.12" },
+]
+provides-extras = ["cf", "test", "rio"]
 
 [[package]]
 name = "yarl"
