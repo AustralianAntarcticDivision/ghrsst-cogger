@@ -1,5 +1,9 @@
 # GHRSST Cogger and Lambda Function
 
+Documentation for using the data, with background and examples for Python, R, GDAL,
+DuckDB and the browser: <https://australianantarcticdivision.github.io/ghrsst-cogger/>
+(source in [`docs/`](docs/)). This README covers developing and running the pipeline.
+
 ## Overview
 
 The architecture for this process has the following components:

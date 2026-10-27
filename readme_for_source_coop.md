@@ -15,11 +15,20 @@ For more information, please refer to the [documentation](https://podaac.jpl.nas
 
 ## About this repository
 
-The [code used to repackage this data is accessible here](https://github.com/AustralianAntarcticDivision/ghrsst-cogger).
+The [code used to repackage this data is accessible here](https://github.com/AustralianAntarcticDivision/ghrsst-cogger),
+and the [documentation](https://australianantarcticdivision.github.io/ghrsst-cogger/) has background and
+examples for Python, R, GDAL, DuckDB and the browser.
 
 Care has been taken to not change the source data, but just to repackage it into cloud optimised geotiffs with
 STAC metadata. Each daily dataset is accessible in a `<year>/<month>/<day>` path, and file names are consistent with the
-source data, e.g., `"{$Y%m%d}090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.stac-item.json`.
+source data, e.g. `2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.stac-item.json`, with one COG
+per variable (`..._analysed_sst.tif`, `..._analysis_error.tif`, `..._mask.tif`, `..._sea_ice_fraction.tif` and, where
+the source has it, `..._sst_anomaly.tif`).
+
+Every COG is on the same north-up grid in `EPSG:4326`: 36000 by 17999 pixels of 0.01 degree, with its top-left
+corner at -179.995, 89.995. Values are the source's integers, with nodata, scale and offset in the metadata. For
+`analysed_sst`, the COG's own metadata gives degrees Celsius (offset 25), while the STAC item's `raster:bands` keeps
+the source's Kelvin (offset 298.15); both give the same temperature.
 
 ## Preliminary and final data
 
@@ -104,6 +113,7 @@ bbox = (
     center[0] + buffer,
 )
 
+# rustac is async: use await in a notebook, or asyncio.run(...) in a script
 items = (await rustac.read(url))["features"]
 
 # Or use .search to filter by place and time, which returns a list of items
@@ -138,22 +148,25 @@ date <- as.Date("2025-02-14")
 (url <- glue::glue(template))
 ```
 
-Strictly, we should check the catalogue first:
+Strictly, we should check the catalogue first, which also says whether the day is final:
 
 ``` r
 catalog <- arrow::read_parquet("https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.parquet")
 
-if (!url %in% catalog$assets$analysed_sst$href) {
+i <- match(url, catalog$assets$analysed_sst$href)
+if (is.na(i)) {
   message("file does not exist, check available dates")
 } else {
+  catalog$`ghrsst:status`[i]  # "final", "preliminary" or "nrt_only"
   dsn <- glue::glue("/vsicurl/{url}")
 }
 ```
 
-Read using the terra package:
+Read using the terra package (which applies the scale and offset, giving degrees Celsius):
 
 ``` r
 library(terra)
+setGDALconfig("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
 (sst <- rast(dsn))
 ```
 
@@ -194,8 +207,17 @@ target <- rast(
 project(sst, target, by_util = TRUE)
 ```
 
+## Coming: virtual indexes
+
+Indexes that open the whole archive as one array per variable (time, latitude, longitude), without copying
+the data, will be published alongside the COGs: a GDAL multidimensional VRT, a flat tabular index of every
+tile (in addition to the STAC GeoParquet), kerchunk Parquet references and an Icechunk store. See
+[Virtual stores](https://australianantarcticdivision.github.io/ghrsst-cogger/virtual.html).
+
 ## License
 
-See: [https://podaac.jpl.nasa.gov/CitingPODAAC](https://podaac.jpl.nasa.gov/CitingPODAAC)
+The source is the GHRSST Level 4 MUR Global Foundation Sea Surface Temperature Analysis (v4.1), NASA JPL,
+distributed by PO.DAAC, [doi:10.5067/GHGMR-4FJ04](https://doi.org/10.5067/GHGMR-4FJ04). To cite it, see:
+[https://podaac.jpl.nasa.gov/CitingPODAAC](https://podaac.jpl.nasa.gov/CitingPODAAC)
 
 > Data hosted by the PO.DAAC is openly shared, without restriction, in accordance with NASA's Earth Science program Data and Information Policy.

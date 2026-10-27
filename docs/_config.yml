@@ -1,0 +1,40 @@
+title: GHRSST MUR as COGs
+description: >-
+  Daily GHRSST MUR sea surface temperature as Cloud Optimised GeoTIFFs with STAC,
+  openly hosted on Source Cooperative.
+url: https://australianantarcticdivision.github.io
+baseurl: /ghrsst-cogger
+
+remote_theme: just-the-docs/just-the-docs@v0.12.0
+plugins:
+  - jekyll-remote-theme
+  - jekyll-relative-links
+  - jekyll-seo-tag
+
+# Links between .md pages work on GitHub and on the site
+relative_links:
+  enabled: true
+  collections: false
+
+search_enabled: true
+heading_anchors: true
+back_to_top: true
+back_to_top_text: "Back to top"
+
+aux_links:
+  "Code on GitHub":
+    - "https://github.com/AustralianAntarcticDivision/ghrsst-cogger"
+  "Data on Source Cooperative":
+    - "https://source.coop/ausantarctic/ghrsst-mur-v2"
+aux_links_new_tab: true
+
+gh_edit_link: true
+gh_edit_link_text: "Edit this page on GitHub"
+gh_edit_repository: "https://github.com/AustralianAntarcticDivision/ghrsst-cogger"
+gh_edit_branch: "main"
+gh_edit_source: docs
+gh_edit_view_mode: "tree"
+
+footer_content: >-
+  Code: Apache-2.0 licence (see the repository). Data: GHRSST MUR v4.1 from NASA JPL,
+  distributed by PO.DAAC, repackaged without changing values.
