@@ -16,6 +16,8 @@ dependencies = [
     "h5netcdf[h5py]>=1.8.1,<2",
     "netcdf4>=1.7.5,<2",
     "odc-geo[tiff]>=0.5.3,<0.6",
+    # xvrt.from_stac needs pyproj
+    "pyproj>=3.8.0,<4",
     "pystac>=1.15.2,<2",
     "rasterio>=1.5.2,<2",
     "requests>=2.34.2,<3",
