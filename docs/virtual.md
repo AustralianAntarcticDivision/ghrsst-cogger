@@ -41,7 +41,7 @@ each day's COG header, and assembles a lazy array:
 | Python, [odc-stac](https://github.com/opendatacube/odc-stac) | `odc.stac.load(items, chunks={})` gives a dask-backed xarray cube ([example](python.md#many-days-as-a-lazy-cube)) |
 | Python, [stackstac](https://github.com/gjoseph92/stackstac) | `stackstac.stack(items)`, the same idea |
 | R, [terra](https://rspatial.github.io/terra/) | `rast(urls)` with `time()` set, one layer per day ([example](r.md#many-days)) |
-| GDAL | `gdalbuildvrt -separate` over a list of URLs, one band per day ([example](other-tools.md#gdal-command-line)) |
+| GDAL | `gdal raster stack` over a list of URLs, one band per day ([example](other-tools.md#gdal-command-line)) |
 
 These work now and need nothing new. Their cost is at the start: every session reads
 the index and then the header of every day it uses, a few hundred requests for a year,
@@ -59,7 +59,7 @@ variable, with each time step pointing at that day's COG and the scale, offset a
 nodata declared once. GDAL opens it as a multidimensional dataset, so anything built on
 GDAL's multidimensional API can slice it by time and space:
 
-- GDAL: `gdalmdiminfo`, `gdalmdimtranslate`, or `gdal mdim` in GDAL 3.11 and later
+- GDAL: `gdal mdim info` and `gdal mdim convert`
 - R: `terra::rast(x, md = TRUE)`, or [gdalraster](https://firelab.github.io/gdalraster/)'s multidimensional functions
 - Python: `osgeo.gdal` with `gdal.OF_MULTIDIM_RASTER`, or xarray through a GDAL backend
   such as [gdalxarray](https://github.com/hypertidy/gdalxarray)

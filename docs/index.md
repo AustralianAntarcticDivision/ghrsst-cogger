@@ -14,20 +14,22 @@ are kept up to date by a daily job.
 The values are the source values. Each NetCDF variable becomes one COG per day, stored
 as the same integers with nodata, scale and offset in the metadata, on an exact north-up
 0.01 degree grid. (For `analysed_sst` the offset gives degrees Celsius, where the
-source's gives Kelvin; see [Values and units](data.md#values-and-units).) What changes is the packaging: any tool that reads a GeoTIFF over HTTP can now read
-just the part of the world, and the resolution, it needs.
+source's gives Kelvin; see [Values and units](data.md#values-and-units).)
 
-## Start here
+What changes is the packaging: any tool that reads a GeoTIFF over HTTP can read just the
+part of the world, and the resolution, it needs.
 
-| I want to | Go to |
+## Contents
+
+| Page | Covers |
 |---|---|
-| Understand why this exists and how it replaced a local file cache | [Background](background.md) |
-| Know the file layout, grid, variables, units and STAC fields | [The data](data.md) |
-| Load it in Python (odc-stac, rasterio, rustac, DuckDB) | [Python](python.md) |
-| Load it in R (terra, gdalraster, vapour, stars, arrow) | [R](r.md) |
-| Use GDAL on the command line, DuckDB, QGIS or a browser | [Other tools](other-tools.md) |
-| Treat the daily COGs as one cube, now and with the indexes that are coming | [Virtual stores](virtual.md) |
-| Know how the files are made and kept final | [How it's made](pipeline.md) |
+| [Background](background.md) | Motivation, and the move from a local file cache to a public cloud copy |
+| [The data](data.md) | File layout, grid, variables, units and STAC fields |
+| [Python](python.md) | odc-stac, rasterio, rustac, DuckDB |
+| [R](r.md) | terra, gdalraster, vapour, stars, arrow |
+| [Other tools](other-tools.md) | GDAL command line, DuckDB, QGIS, the browser |
+| [Virtual stores](virtual.md) | The daily COGs as one cube, now and with the coming indexes |
+| [How it's made](pipeline.md) | Conversion, infrastructure, and how days are kept final |
 
 ## In one minute
 
@@ -40,7 +42,7 @@ https://data.source.coop/ausantarctic/ghrsst-mur-v2/{YYYY}/{MM}/{DD}/{YYYYMMDD}0
 With GDAL (any language that wraps it):
 
 ```bash
-gdalinfo /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif
+gdal raster info /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif
 ```
 
 The index of every day, with each day's status (`final`, `preliminary` or `nrt_only`):
