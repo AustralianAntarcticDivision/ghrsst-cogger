@@ -11,7 +11,7 @@ nav_order: 6
 
 ## GDAL command line
 
-Any GDAL tool reads the COGs from a `/vsicurl/` URL. Set
+The `gdal` command (GDAL 3.11 and later) reads the COGs from a `/vsicurl/` URL. Set
 `GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR` so GDAL doesn't list the remote folder:
 
 ```bash
@@ -19,25 +19,25 @@ export GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
 COG=/vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif
 
 # Size, grid, tiling, overviews, scale and offset
-gdalinfo $COG
+gdal raster info $COG
 
-# The value at a point (the stored integer: apply scale 0.001 and offset 25 for deg C)
-gdallocationinfo -valonly -wgs84 $COG 147 -45
+# The value at a point: both the stored integer and the scaled value (deg C)
+gdal raster pixel-info --position-crs WGS84 -f CSV $COG 147,-45
 
-# A region, as it is
-gdal_translate -projwin 130 -42 150 -55 $COG tasman.tif
+# A region, as it is (xmin,ymin,xmax,ymax)
+gdal raster clip --bbox 130,-55,150,-42 $COG tasman.tif
 
 # A region in a local projection, at 1 km
-gdalwarp -t_srs "+proj=laea +lon_0=147 +lat_0=-45" \
-  -te -600000 -600000 600000 600000 -tr 1000 1000 -r bilinear \
+gdal raster reproject -d "+proj=laea +lon_0=147 +lat_0=-45" \
+  --bbox -600000,-600000,600000,600000 --resolution 1000,1000 -r bilinear \
   $COG tasman_laea.tif
 
 # The whole world at about 0.25 degree, read from an overview
-gdal_translate -outsize 1440 0 $COG world_quarter_degree.tif
+gdal raster resize --size 1440,0 $COG world_quarter_degree.tif
 ```
 
-GDAL 3.11 and later also have the `gdal` command (`gdal raster info`,
-`gdal raster clip`, `gdal raster reproject`, ...) with the same inputs.
+These need GDAL 3.11 or later; the classic utilities (`gdalinfo`, `gdal_translate`,
+`gdalwarp`, ...) work with the same inputs on older versions.
 
 A stack of days as the bands of one virtual raster, read lazily:
 
@@ -46,15 +46,15 @@ for d in 2024-12-29 2024-12-30 2024-12-31; do
   ymd=${d//-/}
   echo "/vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/${d:0:4}/${d:5:2}/${d:8:2}/${ymd}090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif"
 done > days.txt
-gdalbuildvrt -separate -input_file_list days.txt days.vrt
-gdallocationinfo -valonly -wgs84 days.vrt 147 -45
+gdal raster stack @days.txt days.vrt
+gdal raster pixel-info --position-crs WGS84 -f CSV days.vrt 147,-45
 ```
 
 Inside AWS `us-west-2`, read through S3 instead:
 
 ```bash
 export AWS_NO_SIGN_REQUEST=YES AWS_REGION=us-west-2
-gdalinfo /vsis3/us-west-2.opendata.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif
+gdal raster info /vsis3/us-west-2.opendata.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif
 ```
 
 ## DuckDB

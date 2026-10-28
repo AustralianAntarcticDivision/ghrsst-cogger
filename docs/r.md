@@ -96,7 +96,7 @@ str(v)
 ```
 
 The values come back as stored; apply the scale and offset shown by
-`gdalinfo` (see [Values and units](data.md#values-and-units)).
+`gdal raster info` (see [Values and units](data.md#values-and-units)).
 
 ## stars
 

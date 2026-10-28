@@ -103,11 +103,11 @@ the source NetCDF has the same integers with offset `298.15` in Kelvin.
 To see the COG's metadata:
 
 ```bash
-gdalinfo /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif | grep -E "Offset|Scale|Unit|NoData"
+gdal raster info /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif | grep -E "Offset|Scale|Unit|NoData"
 ```
 
-Tools that return the raw integers (for example `gdallocationinfo`, or a warp to an
-integer type) need the scale and offset applied by hand.
+Tools that return the raw integers (for example odc-stac, or a warp to an integer type)
+need the scale and offset applied by hand. `gdal raster pixel-info` reports both.
 
 ## STAC items
 

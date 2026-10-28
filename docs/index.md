@@ -42,7 +42,7 @@ https://data.source.coop/ausantarctic/ghrsst-mur-v2/{YYYY}/{MM}/{DD}/{YYYYMMDD}0
 With GDAL (any language that wraps it):
 
 ```bash
-gdalinfo /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif
+gdal raster info /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif
 ```
 
 The index of every day, with each day's status (`final`, `preliminary` or `nrt_only`):
