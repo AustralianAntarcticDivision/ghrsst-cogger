@@ -92,8 +92,9 @@ async def create_parquet(
     else:
         await rustac.write(out, items)
 
-    # The multidim VRT over every COG, from the same items. After the parquet,
-    # so a VRT problem never blocks the catalogue update.
+    # The multidim VRT over every COG, from the same items. After the parquet, so a
+    # VRT problem can't stop the parquet being written. But it isn't caught: it fails
+    # the invocation, and Lambda's async retries then rebuild the parquet again.
     if write_vrt:
         publish_vrt(items, output_location, log=log)
 
