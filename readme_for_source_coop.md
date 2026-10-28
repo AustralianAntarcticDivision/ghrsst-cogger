@@ -147,7 +147,14 @@ Scale, offset and units come from the STAC metadata, which matches the COG
 headers: `analysed_sst`, `analysis_error` and `sst_anomaly` unscale to degrees
 Celsius.
 
+The VRT is one file of about 17 MB, but every day a read touches costs a read of that
+day's COG header, so a long time series at one point takes a second or two per day.
+Set `GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR`: without it, GDAL also lists each day's
+folder and looks for sidecar files next to every COG, which roughly doubles the time
+(a 10-day read took 38 s without it and 21 s with it).
+
 ```bash
+export GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
 gdal mdim info /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt
 ```
 
@@ -155,12 +162,14 @@ gdal mdim info /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrs
 from osgeo import gdal
 
 gdal.UseExceptions()
+gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
 vrt = "/vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt"
 ds = gdal.OpenEx(vrt, gdal.OF_MULTIDIM_RASTER)
 root = ds.GetRootGroup()
 sst = root.OpenMDArray("analysed_sst").GetUnscaled()  # celsius
 
-# The last 30 days at 44S 150E, finding the row and column from the coordinates
+# The last 30 days at 44S 150E (about a minute: 30 COG headers), finding the row and
+# column from the coordinates
 y = root.OpenMDArray("y").ReadAsArray()
 x = root.OpenMDArray("x").ReadAsArray()
 row, col = int(abs(y + 44).argmin()), int(abs(x - 150).argmin())
