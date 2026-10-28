@@ -7,9 +7,9 @@ nav_order: 7
 {: .no_toc }
 
 The COGs are the storage. A virtual store is an index over them that lets the whole
-archive be opened as a single array (time, latitude, longitude) for each variable,
-without copying or converting any data. This page covers how that works, what you can
-do today, and the indexes that are coming.
+archive be opened as a single array (time, y, x) for each variable, without copying or
+converting any data. This page covers how that works, what you can do today, including
+the GDAL multidimensional VRT, and the indexes that are coming.
 
 1. TOC
 {:toc}
@@ -42,30 +42,68 @@ each day's COG header, and assembles a lazy array:
 | Python, [stackstac](https://github.com/gjoseph92/stackstac) | `stackstac.stack(items)`, the same idea |
 | R, [terra](https://rspatial.github.io/terra/) | `rast(urls)` with `time()` set, one layer per day ([example](r.md#many-days)) |
 | GDAL | `gdal raster stack` over a list of URLs, one band per day ([example](other-tools.md#gdal-command-line)) |
+| GDAL multidimensional | The published VRT, every day as one array per variable ([below](#gdal-multidimensional-vrt)) |
 
-These work now and need nothing new. Their cost is at the start: every session reads
-the index and then the header of every day it uses, a few hundred requests for a year,
-before any pixels.
+The first four build the cube in each session: they read the index and then the header
+of every day they use, a few hundred requests for a year, before any pixels.
+
+## GDAL multidimensional VRT
+
+[`ghrsst-mur-v2.vrt`](https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt) describes every COG as one GDAL multidimensional dataset.
+It's rebuilt from the STAC items each day, with the STAC Parquet file.
+
+- **Arrays:** `analysed_sst`, `analysis_error`, `mask`, `sea_ice_fraction` and
+  `sst_anomaly`, each `(time, y, x)`, plus the `time`, `y` and `x` coordinates.
+- **Time:** one step per day from 2002-06-01, in `days since 1970-01-01`.
+- **Grid:** the shared 0.01 degree grid, with `y` and `x` at pixel centres.
+- **Values:** scale, offset, nodata and unit as in the COGs, so unscaled `analysed_sst`
+  is in degrees Celsius. Days without a variable (`sst_anomaly` before 2014) read as
+  nodata.
+
+The VRT holds no data. Each time step points at that day's COG, and GDAL reads the tiles
+as it would for any GeoTIFF. Opening it reads one file (about 17 MB, growing with each
+day) instead of the STAC index, but a read still opens the header of each day it
+touches, so a long time series at one point costs a request or two per day. Set
+`GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR` so GDAL doesn't also list each day's folder:
+it roughly halves the time.
+
+```bash
+export GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
+gdal mdim info /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt
+```
+
+Python, with GDAL's bindings:
+
+```python
+from osgeo import gdal
+
+gdal.UseExceptions()
+gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+ds = gdal.OpenEx("/vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt", gdal.OF_MULTIDIM_RASTER)
+root = ds.GetRootGroup()
+sst = root.OpenMDArray("analysed_sst")
+
+# The last 7 days at 44S 150E, finding the row and column from the coordinates
+y = root.OpenMDArray("y").ReadAsArray()
+x = root.OpenMDArray("x").ReadAsArray()
+row, col = int(abs(y + 44).argmin()), int(abs(x - 150).argmin())
+n = sst.GetDimensions()[0].GetSize()
+series = sst.GetUnscaled().ReadAsArray(
+    array_start_idx=[n - 7, row, col], count=[7, 1, 1]
+).ravel()  # degrees Celsius
+```
+
+Other readers of GDAL's multidimensional API can open it too:
+
+- GDAL: `gdal mdim convert` to subset or copy out a region and time range
+- R: `terra::rast(x, md = TRUE)`, or [gdalraster](https://firelab.github.io/gdalraster/)'s multidimensional functions
+- Python: xarray through a GDAL backend such as [gdalxarray](https://github.com/hypertidy/gdalxarray)
 
 ## Coming
 
-Four indexes over the same COGs, published alongside them on Source Cooperative. Each
-one describes the archive once, so opening it is a single small read.
-
-### GDAL multidimensional VRT
-
-One VRT file that declares the dimensions (time, latitude, longitude) and an array per
-variable, with each time step pointing at that day's COG and the scale, offset and
-nodata declared once. GDAL opens it as a multidimensional dataset, so anything built on
-GDAL's multidimensional API can slice it by time and space:
-
-- GDAL: `gdal mdim info` and `gdal mdim convert`
-- R: `terra::rast(x, md = TRUE)`, or [gdalraster](https://firelab.github.io/gdalraster/)'s multidimensional functions
-- Python: `osgeo.gdal` with `gdal.OF_MULTIDIM_RASTER`, or xarray through a GDAL backend
-  such as [gdalxarray](https://github.com/hypertidy/gdalxarray)
-
-GDAL reads the tiles from the COGs as it would for any GeoTIFF, so nothing about the
-codecs or the tile layout needs to be described.
+Three more indexes over the same COGs, to be published alongside them on Source
+Cooperative. Each records where every tile is, so unlike the VRT, opening one doesn't
+read any COG headers.
 
 ### A flat tabular index
 
@@ -102,8 +140,9 @@ analyses can still name the exact version they used.
 - **Days without `sst_anomaly`.** Older source files don't have it, so that array has
   missing time steps.
 - **Change.** Preliminary days are rewritten at the same URLs when their final arrives,
-  so references to them go stale. The indexes will record each COG's `file:checksum`
-  and be rebuilt as days are finalised. `final` days don't change.
+  so references to them go stale. The VRT points at files, not byte ranges, so it isn't
+  affected. The other indexes will record each COG's `file:checksum` and be rebuilt as
+  days are finalised. `final` days don't change.
 
 ## Why not convert to Zarr?
 

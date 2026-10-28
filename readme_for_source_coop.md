@@ -250,11 +250,11 @@ target <- rast(
 project(sst, target, by_util = TRUE)
 ```
 
-## Coming: virtual indexes
+## Coming: more virtual indexes
 
-Indexes that open the whole archive as one array per variable (time, latitude, longitude), without copying
-the data, will be published alongside the COGs: a GDAL multidimensional VRT, a flat tabular index of every
-tile (in addition to the STAC GeoParquet), kerchunk Parquet references and an Icechunk store. See
+Besides the multidimensional VRT above, more indexes that open the whole archive as one array per variable,
+without copying the data, will be published alongside the COGs: a flat tabular index of every tile (in addition
+to the STAC GeoParquet), kerchunk Parquet references and an Icechunk store. See
 [Virtual stores](https://australianantarcticdivision.github.io/ghrsst-cogger/virtual.html).
 
 ## License
