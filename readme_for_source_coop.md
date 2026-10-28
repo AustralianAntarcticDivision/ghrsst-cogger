@@ -157,11 +157,14 @@ from osgeo import gdal
 gdal.UseExceptions()
 vrt = "/vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt"
 ds = gdal.OpenEx(vrt, gdal.OF_MULTIDIM_RASTER)
-sst = ds.GetRootGroup().OpenMDArray("analysed_sst").GetUnscaled()  # celsius
+root = ds.GetRootGroup()
+sst = root.OpenMDArray("analysed_sst").GetUnscaled()  # celsius
 
-# The last 30 days at 44S 150E (row and column on the 0.01 degree grid)
+# The last 30 days at 44S 150E, finding the row and column from the coordinates
+y = root.OpenMDArray("y").ReadAsArray()
+x = root.OpenMDArray("x").ReadAsArray()
+row, col = int(abs(y + 44).argmin()), int(abs(x - 150).argmin())
 n = sst.GetDimensions()[0].GetSize()
-row, col = round((89.995 + 44) / 0.01), round((179.995 + 150) / 0.01)
 series = sst.ReadAsArray(array_start_idx=[n - 30, row, col], count=[30, 1, 1]).ravel()
 print(series)
 ```
