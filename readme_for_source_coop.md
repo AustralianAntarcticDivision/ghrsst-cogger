@@ -133,6 +133,61 @@ data = load(items, bbox=bbox, chunks={})
 data
 ```
 
+### All dates as one cube: multidimensional VRT
+
+`ghrsst-mur-v2.vrt` describes every COG as one GDAL multidimensional dataset:
+five `(time, y, x)` arrays (`analysed_sst`, `analysis_error`, `mask`,
+`sea_ice_fraction`, `sst_anomaly`) on the shared 0.01 degree grid, one time
+step per day from 2002-06-01. It is rebuilt with the STAC Parquet file each
+day and holds no data itself: reads go to the COGs, and only the COGs a read
+touches are opened. Days without a file for a variable (`sst_anomaly` before
+2014) read as nodata.
+
+Scale, offset and units come from the STAC metadata, which matches the COG
+headers: `analysed_sst`, `analysis_error` and `sst_anomaly` unscale to degrees
+Celsius.
+
+The VRT is one file of about 17 MB, but every day a read touches costs a read of that
+day's COG header, so a long time series at one point takes a second or two per day.
+Set `GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR`: without it, GDAL also lists each day's
+folder and looks for sidecar files next to every COG, which roughly doubles the time
+(a 10-day read took 38 s without it and 21 s with it).
+
+```bash
+export GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
+gdal mdim info /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt
+```
+
+```python
+from osgeo import gdal
+
+gdal.UseExceptions()
+gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+vrt = "/vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt"
+ds = gdal.OpenEx(vrt, gdal.OF_MULTIDIM_RASTER)
+root = ds.GetRootGroup()
+sst = root.OpenMDArray("analysed_sst").GetUnscaled()  # celsius
+
+# The last 30 days at 44S 150E (about a minute: 30 COG headers), finding the row and
+# column from the coordinates
+y = root.OpenMDArray("y").ReadAsArray()
+x = root.OpenMDArray("x").ReadAsArray()
+row, col = int(abs(y + 44).argmin()), int(abs(x - 150).argmin())
+n = sst.GetDimensions()[0].GetSize()
+series = sst.ReadAsArray(array_start_idx=[n - 30, row, col], count=[30, 1, 1]).ravel()
+print(series)
+```
+
+Any reader of GDAL's multidimensional API can open it, for example an xarray
+backend for GDAL:
+
+```python
+import xarray as xr
+
+ds = xr.open_dataset(vrt, engine="gdalxarray")
+ds.analysed_sst.sel(time="2025-02-14").sel(y=-44, x=150, method="nearest")
+```
+
 ### Using R
 
 The 'analysed_sst' files are templated by:
@@ -207,11 +262,11 @@ target <- rast(
 project(sst, target, by_util = TRUE)
 ```
 
-## Coming: virtual indexes
+## Coming: more virtual indexes
 
-Indexes that open the whole archive as one array per variable (time, latitude, longitude), without copying
-the data, will be published alongside the COGs: a GDAL multidimensional VRT, a flat tabular index of every
-tile (in addition to the STAC GeoParquet), kerchunk Parquet references and an Icechunk store. See
+Besides the multidimensional VRT above, more indexes that open the whole archive as one array per variable,
+without copying the data, will be published alongside the COGs: a flat tabular index of every tile (in addition
+to the STAC GeoParquet), kerchunk Parquet references and an Icechunk store. See
 [Virtual stores](https://australianantarcticdivision.github.io/ghrsst-cogger/virtual.html).
 
 ## License

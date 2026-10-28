@@ -117,8 +117,9 @@ each one is final. Re-converted COGs keep their URLs, so they record a checksum 
 
 The COGs are the storage. The next layer is indexes that let the archive be opened as a
 single time series array in the tools people already use, without a second copy of the
-data: a GDAL multidimensional VRT, a flat tabular index of every tile, kerchunk Parquet
-references and an Icechunk store. See [Virtual stores](virtual.md).
+data. The first, a GDAL multidimensional VRT, is published; a flat tabular index of
+every tile, kerchunk Parquet references and an Icechunk store are next. See
+[Virtual stores](virtual.md).
 
 The same approach, a public cloud copy with a catalogue and virtual indexes, suits
 other datasets from the local collection, and is planned for more of them.

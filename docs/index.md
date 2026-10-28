@@ -62,11 +62,12 @@ are converted from the NRT version and re-converted when the final lands. Every 
 says which it is, in `ghrsst:status`. For research that needs the final analysis, filter
 on `ghrsst:status = 'final'`. See [The data](data.md#preliminary-and-final).
 
-## Coming
+## Virtual stores
 
-Virtual indexes over the same COGs, so the whole archive opens as one array without
-copying any data: a GDAL multidimensional VRT, a flat tabular index of every tile, a
-kerchunk Parquet reference store and an Icechunk store. See [Virtual stores](virtual.md).
+Indexes over the same COGs, so the whole archive opens as one array without copying any
+data. A GDAL multidimensional VRT is published now; a flat tabular index of every tile,
+a kerchunk Parquet reference store and an Icechunk store are coming. See
+[Virtual stores](virtual.md).
 
 ## Source and citation
 

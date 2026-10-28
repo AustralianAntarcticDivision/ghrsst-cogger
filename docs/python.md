@@ -154,9 +154,12 @@ same items.
 
 ## Virtual stores
 
-A GDAL multidimensional VRT, kerchunk Parquet references and an Icechunk store over the
-COGs are coming, which will open the whole archive as one xarray dataset with no STAC
-step. See [Virtual stores](virtual.md).
+A GDAL multidimensional VRT over the COGs, [`ghrsst-mur-v2.vrt`](https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt), opens the
+whole archive as one array per variable with GDAL's bindings
+(`gdal.OF_MULTIDIM_RASTER`), with no STAC step. See
+[Virtual stores](virtual.md#gdal-multidimensional-vrt) for an example. Kerchunk Parquet
+references and an Icechunk store are coming, which will open the archive as one xarray dataset
+without GDAL.
 
 ## Tips
 

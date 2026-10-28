@@ -172,6 +172,7 @@ COG URLs, and `raadtools::readghrsst()` reads them. See
 
 ## Virtual stores
 
-A GDAL multidimensional VRT over the daily COGs is coming, which opens the archive as
-one time series array: `terra::rast(x, md = TRUE)`, or gdalraster's multidimensional
-functions, with no per-file step. See [Virtual stores](virtual.md).
+A GDAL multidimensional VRT over the daily COGs, [`ghrsst-mur-v2.vrt`](https://data.source.coop/ausantarctic/ghrsst-mur-v2/ghrsst-mur-v2.vrt),
+opens the archive as one time series array per variable, with no per-file step:
+`terra::rast(x, md = TRUE)`, or gdalraster's multidimensional functions. See
+[Virtual stores](virtual.md#gdal-multidimensional-vrt).
