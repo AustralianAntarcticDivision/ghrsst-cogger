@@ -40,6 +40,8 @@ from xarray import Dataset
 COLLECTION = "ghrsst-mur-v2"
 FILE_STRING = "{date:%Y%m%d}090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1.nc"
 FOLDER_PATH = "{date:%Y}/{date:%m}/{date:%d}"
+# The source's sea_ice_fraction unit, which newer source files leave out
+SEA_ICE_UNIT = "fraction (between 0 and 1)"
 # Where cache_local downloads NetCDFs. Lambda's only writable disk, and it persists
 # between invocations on a warm container
 CACHE_DIR = Path("/tmp")
@@ -379,6 +381,9 @@ def process_data(data: Dataset) -> Dataset:
 
     if "sst_anomaly" in data.data_vars:
         data["sst_anomaly"].attrs["units"] = "celsius"
+
+    # Newer source files (2014 on) leave this out, older ones have it
+    data["sea_ice_fraction"].attrs.setdefault("units", SEA_ICE_UNIT)
 
     return data
 
@@ -1003,7 +1008,7 @@ def convert_date(
         log.info("Writing STAC")
         provenance = source_provenance(produced, published, attrs, converting=True)
         stac_doc = write_stac(
-            data, written_files, date, output_location, status, provenance, log=log
+            processed, written_files, date, output_location, status, provenance, log=log
         )
     finally:
         if cache_local:

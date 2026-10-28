@@ -95,15 +95,12 @@ Values are stored as the source's integers, with nodata and a scale and offset t
 convert them. For `analysed_sst` the stored type is `int16` with nodata `-32768` and a
 scale of `0.001`.
 
-There are two equivalent ways to turn the integers into temperatures:
+The COG's own metadata (what GDAL and tools built on it, such as terra, rasterio and
+QGIS, apply) and the STAC item's `raster:bands` agree: `analysed_sst`, `analysis_error`
+and `sst_anomaly` give **degrees Celsius**. For `analysed_sst` that's offset `25`, where
+the source NetCDF has the same integers with offset `298.15` in Kelvin.
 
-- **The COG's own metadata** (what GDAL and tools built on it, such as terra, rasterio
-  and QGIS, apply) gives **degrees Celsius**: offset `25`.
-- **The STAC item's `raster:bands`** keeps the source's **Kelvin**: offset `298.15`,
-  unit `kelvin`, as in the NetCDF.
-
-Both give the same physical temperature; they differ by 273.15. Check which one your
-tool applies:
+To see the COG's metadata:
 
 ```bash
 gdalinfo /vsicurl/https://data.source.coop/ausantarctic/ghrsst-mur-v2/2025/06/01/20250601090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1_analysed_sst.tif | grep -E "Offset|Scale|Unit|NoData"
@@ -131,7 +128,7 @@ uses the [Projection](https://github.com/stac-extensions/projection),
 | `processing:version`, `processing:level`, `processing:facility` | properties | `04.1`, `L4`, `NASA JPL` |
 | `processing:software` | properties | Software versions that made the COGs (set when they're made) |
 | `updated` | properties | When the COGs were last made |
-| `raster:bands` | each asset | Data type, nodata, scale, offset and unit (Kelvin for `analysed_sst`) |
+| `raster:bands` | each asset | Data type, nodata, scale, offset and unit (Celsius for the temperatures) |
 | `file:checksum`, `file:size` | each asset | SHA2-256 multihash and size of the COG, when it was made |
 | `derived_from` link | links | The source NetCDF at PO.DAAC (needs an Earthdata login) |
 

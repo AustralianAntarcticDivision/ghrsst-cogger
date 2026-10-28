@@ -13,6 +13,7 @@ from ghrsst.cogger import (
     FILE_STRING,
     JPL_BASE,
     PROCESSING_EXTENSION,
+    SEA_ICE_UNIT,
     STATUS_PROPERTY,
     VARIABLES,
     _attrs_as_str,
@@ -54,7 +55,7 @@ def test_write_cogs_and_stac_from_sample(sample, tmp_path):
     status = status_from_title(SAMPLE_DATE.date(), attrs["title"])
     assert status == "final"  # the sample is the final product
     provenance = source_provenance(None, None, attrs, converting=True)
-    write_stac(sample, written, SAMPLE_DATE, tmp_path, status, provenance)
+    write_stac(processed, written, SAMPLE_DATE, tmp_path, status, provenance)
 
     stac_file = get_output_path(tmp_path, SAMPLE_DATE, ".stac-item.json")
     doc = json.loads(stac_file.read_text())
@@ -73,8 +74,18 @@ def test_write_cogs_and_stac_from_sample(sample, tmp_path):
     }.items() <= next(
         link for link in doc["links"] if link["rel"] == "derived_from"
     ).items()
-    for var, _, fields in written:
+    for var, path, fields in written:
         assert doc["assets"][var]["file:checksum"] == fields["file:checksum"]
+        # The STAC describes the COG it points to (#20)
+        band = doc["assets"][var]["raster:bands"][0]
+        with rasterio.open(path) as cog:
+            assert band.get("scale", 1.0) == cog.scales[0]
+            assert band.get("offset", 0.0) == cog.offsets[0]
+            assert band.get("unit") == (cog.units[0] or None)
+            assert band["nodata"] == cog.nodata
+    sst = doc["assets"]["analysed_sst"]["raster:bands"][0]
+    assert (sst["unit"], sst["offset"]) == ("celsius", 25.0)
+    assert doc["assets"]["sea_ice_fraction"]["raster:bands"][0]["unit"] == SEA_ICE_UNIT
 
     # Without overwrite, existing COGs are kept as they are, so no new checksums
     mtimes = {var: path.stat().st_mtime for var, path, _ in written}

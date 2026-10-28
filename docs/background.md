@@ -57,8 +57,7 @@ HTTP, and publishes it openly on
   not the full 36000 by 17999 grid.
 - **The values are unchanged.** The integers are written as they are in the NetCDF,
   with a scale and offset to convert them, so nothing is lost or rounded. (For
-  `analysed_sst` the COG's offset gives degrees Celsius; the STAC item keeps the
-  source's Kelvin.)
+  `analysed_sst` the offset gives degrees Celsius, where the source's gives Kelvin.)
 - **The grid is fixed once.** North-up, with an exact geotransform (0.01 degree pixels,
   top-left corner at -179.995, 89.995), so every GDAL-based reader agrees on where each
   pixel is.
