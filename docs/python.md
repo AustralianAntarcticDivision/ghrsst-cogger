@@ -31,12 +31,12 @@ data = load([item], bands=["analysed_sst"], chunks={}, anchor="center")
 ```
 
 odc-stac returns the stored integers. Apply the scale and offset from the item's
-`raster:bands`, which are in Kelvin:
+`raster:bands`, which give degrees Celsius:
 
 ```python
 band = item.assets["analysed_sst"].extra_fields["raster:bands"][0]
 sst = data["analysed_sst"].squeeze()
-sst_c = sst.where(sst != band["nodata"]) * band["scale"] + band["offset"] - 273.15
+sst_c = sst.where(sst != band["nodata"]) * band["scale"] + band["offset"]
 
 sst_c.sel(longitude=slice(130, 150), latitude=slice(-42, -55)).plot.imshow(
     robust=True, cmap="inferno"
@@ -144,7 +144,7 @@ cube = load(
 )
 band = items[0].assets["analysed_sst"].extra_fields["raster:bands"][0]
 sst = cube["analysed_sst"]
-sst_c = sst.where(sst != band["nodata"]) * band["scale"] + band["offset"] - 273.15
+sst_c = sst.where(sst != band["nodata"]) * band["scale"] + band["offset"]
 
 series = sst_c.sel(longitude=147.0, latitude=-45.0, method="nearest").compute()
 ```

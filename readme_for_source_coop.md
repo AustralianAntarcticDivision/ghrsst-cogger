@@ -26,9 +26,10 @@ per variable (`..._analysed_sst.tif`, `..._analysis_error.tif`, `..._mask.tif`, 
 the source has it, `..._sst_anomaly.tif`).
 
 Every COG is on the same north-up grid in `EPSG:4326`: 36000 by 17999 pixels of 0.01 degree, with its top-left
-corner at -179.995, 89.995. Values are the source's integers, with nodata, scale and offset in the metadata. For
-`analysed_sst`, the COG's own metadata gives degrees Celsius (offset 25), while the STAC item's `raster:bands` keeps
-the source's Kelvin (offset 298.15); both give the same temperature.
+corner at -179.995, 89.995. Values are the source's integers, with nodata, scale and offset in the metadata. The
+COG's own metadata and the STAC item's `raster:bands` agree: `analysed_sst`, `analysis_error` and `sst_anomaly`
+unscale to degrees Celsius. The source is in Kelvin; only the offset differs (25 here, 298.15 in the source), so the
+integers are unchanged.
 
 ## Preliminary and final data
 
@@ -86,9 +87,8 @@ sst_masked = sst_loaded.where(sst_loaded != -32768)
 meta = item.assets["analysed_sst"].extra_fields["raster:bands"][0]
 scale = meta["scale"]
 offset = meta["offset"]
-k_to_c = -273.15
 
-sst_scaled = sst_masked * scale + offset + k_to_c
+sst_scaled = sst_masked * scale + offset  # degrees Celsius
 sst_scaled.plot.imshow(size=8, robust=True, cmap="inferno")
 ```
 
