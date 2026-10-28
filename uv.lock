@@ -369,7 +369,7 @@ requires-dist = [
     { name = "rustac", specifier = ">=0.9.17,<0.10" },
     { name = "s3path", specifier = ">=0.6.5,<0.7" },
     { name = "xarray", specifier = ">=2026.9.0" },
-    { name = "xvrt", url = "https://github.com/rgdal-dev/xvrt/archive/0cd1fed209f0a5bc3dfd8f0fb95d0c02fff1cc54.tar.gz" },
+    { name = "xvrt", specifier = ">=0.1.0,<0.2" },
 ]
 
 [package.metadata.requires-dev]
@@ -1467,27 +1467,16 @@ wheels = [
 
 [[package]]
 name = "xvrt"
-version = "0.0.1.9000"
-source = { url = "https://github.com/rgdal-dev/xvrt/archive/0cd1fed209f0a5bc3dfd8f0fb95d0c02fff1cc54.tar.gz" }
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "xarray" },
 ]
-sdist = { hash = "sha256:d5b71456c137c16b58311fd89ecd8329f4377ae76064dee63385f21bd29e0388" }
-
-[package.metadata]
-requires-dist = [
-    { name = "cf-xarray", marker = "extra == 'cf'" },
-    { name = "dask", marker = "extra == 'test'" },
-    { name = "h5netcdf", marker = "extra == 'test'" },
-    { name = "lxml", marker = "extra == 'test'" },
-    { name = "netcdf4", marker = "extra == 'test'" },
-    { name = "numpy", specifier = ">=1.24" },
-    { name = "pytest", marker = "extra == 'test'" },
-    { name = "rioxarray", marker = "extra == 'rio'" },
-    { name = "xarray", specifier = ">=2023.12" },
+sdist = { url = "https://files.pythonhosted.org/packages/21/84/69bb69ce2b915e096eeec97c2173b1516cae0f501b5409d57ae3b002ac40/xvrt-0.1.0.tar.gz", hash = "sha256:dbfad4e7d84a5d378fa881b49cb07581e78bc98585fb701844c51d57a7b2652d", size = 45703, upload-time = "2026-10-27T19:33:12.92Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/ee/138d3a9936f70d0c6ebe851000745f6a512cd29204039ff46dde5e307d6b/xvrt-0.1.0-py3-none-any.whl", hash = "sha256:276a2068451bbe3bd453ab7807546a0cd55efacf608aeef7fcd000458a110e6b", size = 32095, upload-time = "2026-10-27T19:33:11.565Z" },
 ]
-provides-extras = ["cf", "test", "rio"]
 
 [[package]]
 name = "yarl"
